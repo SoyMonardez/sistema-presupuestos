@@ -326,7 +326,7 @@
 
     voiceBtn.addEventListener('click', () => {
         if (!Voice.isSupported()) {
-            toast('Tu navegador no soporta dictado por voz. Usá Chrome.', true);
+            toast('Tu navegador no soporta grabación de audio. Actualizalo.', true);
             return;
         }
         if (Voice.isActive()) {
@@ -335,24 +335,27 @@
         }
         hideAIPanel();
         hideDraft();
-        voiceBtn.classList.add('recording');
-        voiceLabel.textContent = 'Escuchando… (tocá para parar)';
 
         Voice.start({
-            onPartial(text) {
-                voiceLabel.textContent = text.length > 36 ? '…' + text.slice(-34) : (text || 'Escuchando…');
+            onTick(secs) {
+                voiceBtn.classList.add('recording');
+                const mm = String(Math.floor(secs / 60));
+                const ss = String(secs % 60).padStart(2, '0');
+                voiceLabel.textContent = `Grabando ${mm}:${ss} — tocá para parar`;
             },
-            async onEnd(finalText) {
+            async onStop(blob) {
                 voiceBtn.classList.remove('recording');
-                voiceLabel.textContent = 'Dictar items';
-                if (!finalText) {
-                    toast('No se escuchó nada', true);
+                if (blob.size < 1500) {
+                    voiceLabel.textContent = 'Dictar items';
+                    toast('La grabación quedó muy corta', true);
                     return;
                 }
-                voiceLabel.textContent = 'Procesando…';
+                voiceLabel.textContent = 'Transcribiendo…';
                 try {
-                    const { items: parsed } = await API.aiParse(finalText);
-                    if (!parsed.length) toast('La IA no encontró items en lo dictado', true);
+                    const { text } = await API.aiTranscribe(blob);
+                    voiceLabel.textContent = 'Armando items…';
+                    const { items: parsed } = await API.aiParse(text);
+                    if (!parsed.length) toast(`Se escuchó "${text.slice(0, 60)}" pero no se encontraron items`, true);
                     else showDraft(parsed);
                 } catch (err) {
                     toast(err.message, true);

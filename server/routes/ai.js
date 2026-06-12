@@ -1,19 +1,22 @@
+import express from 'express';
 import { Router } from 'express';
-import { callGroq } from '../groq.js';
+import { callGroq, transcribeAudio } from '../groq.js';
 
 const router = Router();
 
-const PARSE_SYSTEM = `Sos un asistente que convierte descripciones habladas o escritas de trabajos/presupuestos en items estructurados. El usuario es un trabajador argentino (construcción, refacciones, servicios) que dicta por voz, así que el texto puede venir desprolijo, sin puntuación y con jerga.
+const PARSE_SYSTEM = `Sos un presupuestista experto en construcción y refacciones en Argentina. Convertís descripciones habladas o escritas de trabajos en items de presupuesto. El usuario dicta por voz, así que el texto puede venir desprolijo, sin puntuación y con jerga.
 
 Reglas:
 - Devolvé SOLO un JSON con esta forma exacta: {"items":[{"name":"...","quantity":N,"unit":"...","unit_price":N}]}
-- "name": nombre claro y corto del item, con mayúscula inicial (ej: "Cerámica para piso", "Mano de obra").
+- "name": nombre claro y profesional del item, con mayúscula inicial (ej: "Demolición de pared de ladrillo", "Mano de obra").
 - "quantity": número. Si no se menciona, usar 1.
 - "unit": unidad de medida. Usá: "m²" (metros cuadrados), "m" (metros lineales), "un." (unidades), "kg", "lt", "hs" (horas), "saco", "día", "global". Si no está claro, "un.".
-- "unit_price": precio unitario en pesos argentinos, como número sin separadores. Si no se menciona precio, usar 0.
+- "unit_price": precio unitario en pesos argentinos, número sin separadores.
 - Jerga de plata argentina: "luca" = 1.000 (ej "15 lucas" = 15000), "un palo" = 1.000.000, "gamba" = 100, "20 mil" = 20000, "k" = 1000.
 - Si dicen el precio total de varias unidades (ej "3 puertas por 300 mil"), calculá el precio unitario (100000).
-- Si el texto no contiene ningún item reconocible, devolvé {"items":[]}.`;
+- Si NO mencionan precio, estimá un precio de mercado realista en pesos argentinos actuales (tené en cuenta la inflación: los precios de construcción en Argentina son altos, ej. la hora de albañil ronda decenas de miles de pesos, no cientos). El usuario siempre revisa y corrige antes de confirmar.
+- Si mencionan un trabajo grande sin detallar (ej "hacer un baño completo"), desglosalo en sus items típicos (demolición, materiales, colocación, plomería, mano de obra, etc.).
+- Si el texto no contiene ningún trabajo o item reconocible, devolvé {"items":[]}.`;
 
 const SUGGEST_SYSTEM = `Sos un asistente de presupuestos para un trabajador argentino (construcción, refacciones, servicios). El usuario está escribiendo el nombre de un item y necesitás sugerir cómo completarlo.
 
@@ -22,8 +25,25 @@ Reglas:
 - Máximo 3 sugerencias, ordenadas por relevancia.
 - "name": nombre completo y profesional del item que empieza o se relaciona con lo que escribió el usuario.
 - "unit": unidad típica ("m²", "m", "un.", "kg", "lt", "hs", "saco", "día", "global").
-- "unit_price": precio estimado de mercado en pesos argentinos (número, sin separadores). Es una referencia aproximada; si no tenés idea, usá 0.
+- "unit_price": precio estimado de mercado en pesos argentinos actuales (número, sin separadores). Tené en cuenta la inflación argentina: los precios de construcción son altos (la hora de albañil ronda decenas de miles de pesos, el m² de colocación de cerámica también). Si no tenés idea, usá 0.
 - Tené en cuenta los items que ya cargó (te los paso como contexto) para inferir el rubro del trabajo.`;
+
+// Audio crudo (el frontend manda el blob del MediaRecorder tal cual)
+const rawAudio = express.raw({ type: ['audio/*', 'video/*', 'application/octet-stream'], limit: '15mb' });
+
+router.post('/transcribe', rawAudio, async (req, res) => {
+    if (!req.body || !req.body.length) {
+        return res.status(400).json({ error: 'No llegó audio' });
+    }
+    try {
+        const text = await transcribeAudio(req.body, req.headers['content-type'] || 'audio/webm');
+        if (!text) return res.status(422).json({ error: 'No se entendió el audio. Probá de nuevo más cerca del micrófono.' });
+        res.json({ text });
+    } catch (err) {
+        console.error('[ai/transcribe]', err.message);
+        res.status(502).json({ error: 'No se pudo transcribir el audio. Probá de nuevo.' });
+    }
+});
 
 router.post('/parse', async (req, res) => {
     const text = String(req.body?.text || '').trim();

@@ -33,5 +33,23 @@ const API = {
     deleteBudget(id)   { return this.request(`/api/budgets/${id}`, { method: 'DELETE' }); },
     saveItems(id, items) { return this.request(`/api/budgets/${id}/items`, { method: 'PUT', body: JSON.stringify({ items }) }); },
     aiParse(text)      { return this.request('/api/ai/parse', { method: 'POST', body: JSON.stringify({ text }) }); },
+    async aiTranscribe(blob) {
+        const res = await fetch('/api/ai/transcribe', {
+            method: 'POST',
+            headers: {
+                'Content-Type': blob.type || 'audio/webm',
+                'Authorization': `Bearer ${this.getToken()}`,
+            },
+            body: blob,
+        });
+        if (res.status === 401) {
+            this.clearToken();
+            window.dispatchEvent(new Event('auth-expired'));
+            throw new Error('Sesión vencida');
+        }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+        return data;
+    },
     aiSuggest(query, items) { return this.request('/api/ai/suggest', { method: 'POST', body: JSON.stringify({ query, items }) }); },
 };
