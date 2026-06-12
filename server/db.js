@@ -32,6 +32,15 @@ CREATE TABLE IF NOT EXISTS items (
 );
 
 CREATE INDEX IF NOT EXISTS idx_items_budget ON items(budget_id);
+
+CREATE TABLE IF NOT EXISTS price_refs (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    unit       TEXT NOT NULL DEFAULT 'un.',
+    price      REAL NOT NULL DEFAULT 0,
+    position   INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `);
 
 // Migraciones simples: agrega columnas si faltan (la DB puede venir de una versión anterior)

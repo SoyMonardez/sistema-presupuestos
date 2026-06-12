@@ -32,6 +32,8 @@ const API = {
     updateBudget(id, body) { return this.request(`/api/budgets/${id}`, { method: 'PUT', body: JSON.stringify(body) }); },
     deleteBudget(id)   { return this.request(`/api/budgets/${id}`, { method: 'DELETE' }); },
     saveItems(id, items) { return this.request(`/api/budgets/${id}/items`, { method: 'PUT', body: JSON.stringify({ items }) }); },
+    getPrices()        { return this.request('/api/prices'); },
+    savePrices(prices) { return this.request('/api/prices', { method: 'PUT', body: JSON.stringify({ prices }) }); },
     aiParse(text)      { return this.request('/api/ai/parse', { method: 'POST', body: JSON.stringify({ text }) }); },
     async aiTranscribe(blob) {
         const res = await fetch('/api/ai/transcribe', {
