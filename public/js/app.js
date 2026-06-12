@@ -92,10 +92,16 @@
     // ================= Editor =================
     async function openEditor(id) {
         const data = await API.getBudget(id);
-        currentBudget = { id: data.id, name: data.name, client: data.client, notes: data.notes };
-        items = data.items.map(i => ({ name: i.name, quantity: i.quantity, unit: i.unit, unit_price: i.unit_price }));
+        currentBudget = {
+            id: data.id, name: data.name, client: data.client, notes: data.notes,
+            location: data.location || '', validity_days: data.validity_days ?? 10, advance_pct: data.advance_pct ?? 25,
+        };
+        items = data.items.map(i => ({ name: i.name, detail: i.detail || '', quantity: i.quantity, unit: i.unit, unit_price: i.unit_price }));
         $('#budget-name').value = data.name;
         $('#budget-client').value = data.client;
+        $('#budget-location').value = currentBudget.location;
+        $('#budget-advance').value = currentBudget.advance_pct;
+        $('#budget-validity').value = currentBudget.validity_days;
         hideDraft();
         hideAIPanel();
         renderItems();
@@ -129,6 +135,9 @@
                 name: $('#budget-name').value,
                 client: $('#budget-client').value,
                 notes: currentBudget.notes,
+                location: $('#budget-location').value,
+                advance_pct: Number($('#budget-advance').value) || 0,
+                validity_days: Number($('#budget-validity').value) || 0,
             });
             await API.saveItems(currentBudget.id, items);
             $('#save-status').textContent = 'Guardado';
@@ -141,6 +150,9 @@
 
     $('#budget-name').addEventListener('input', scheduleSave);
     $('#budget-client').addEventListener('input', scheduleSave);
+    $('#budget-location').addEventListener('input', scheduleSave);
+    $('#budget-advance').addEventListener('input', scheduleSave);
+    $('#budget-validity').addEventListener('input', scheduleSave);
 
     // ================= Items =================
     function renderItems() {
@@ -157,19 +169,40 @@
                 <button class="item-remove" title="Quitar">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="18" height="18"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </button>
-                <div class="item-subtotal"></div>`;
+                <div class="item-extra">
+                    <button class="item-detail-toggle" title="Detalles del item">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                        <span class="detail-label">Detalles</span>
+                    </button>
+                    <span class="item-subtotal"></span>
+                </div>
+                <textarea class="f-detail" rows="2" placeholder="Especificaciones (una por línea — salen como viñetas en el PDF)" hidden></textarea>`;
 
-            const nameEl  = row.querySelector('.f-name');
-            const qtyEl   = row.querySelector('.f-qty');
-            const unitEl  = row.querySelector('.f-unit');
-            const priceEl = row.querySelector('.f-price');
-            const subEl   = row.querySelector('.item-subtotal');
+            const nameEl   = row.querySelector('.f-name');
+            const qtyEl    = row.querySelector('.f-qty');
+            const unitEl   = row.querySelector('.f-unit');
+            const priceEl  = row.querySelector('.f-price');
+            const subEl    = row.querySelector('.item-subtotal');
+            const detailEl = row.querySelector('.f-detail');
+            const toggleEl = row.querySelector('.item-detail-toggle');
 
             nameEl.value  = item.name;
             qtyEl.value   = item.quantity || '';
             unitEl.value  = item.unit;
             priceEl.value = item.unit_price || '';
             subEl.textContent = 'Subtotal: ' + formatARS(item.quantity * item.unit_price);
+            detailEl.value = item.detail || '';
+            if (item.detail) {
+                detailEl.hidden = false;
+                toggleEl.classList.add('active');
+            }
+
+            toggleEl.addEventListener('click', () => {
+                detailEl.hidden = !detailEl.hidden;
+                toggleEl.classList.toggle('active', !detailEl.hidden);
+                if (!detailEl.hidden) detailEl.focus();
+            });
+            detailEl.addEventListener('input', () => { item.detail = detailEl.value; scheduleSave(); });
 
             nameEl.addEventListener('input', () => {
                 item.name = nameEl.value;
@@ -207,7 +240,7 @@
     }
 
     $('#btn-add-item').addEventListener('click', () => {
-        items.push({ name: '', quantity: 1, unit: 'un.', unit_price: 0 });
+        items.push({ name: '', detail: '', quantity: 1, unit: 'un.', unit_price: 0 });
         renderItems();
         const inputs = document.querySelectorAll('#items-list .f-name');
         inputs[inputs.length - 1]?.focus();
@@ -298,8 +331,9 @@
         for (const d of parsed) {
             const row = document.createElement('div');
             row.className = 'draft-item';
-            row.innerHTML = `<span></span><span class="draft-item-detail"></span>`;
-            row.firstChild.textContent = d.name;
+            row.innerHTML = `<div class="draft-item-main"><span></span><small class="draft-item-spec"></small></div><span class="draft-item-detail"></span>`;
+            row.querySelector('.draft-item-main span').textContent = d.name;
+            row.querySelector('.draft-item-spec').textContent = (d.detail || '').split('\n').filter(Boolean).join(' · ');
             row.lastChild.textContent = `${d.quantity} ${d.unit} × ${formatARS(d.unit_price)}`;
             listEl.appendChild(row);
         }
@@ -378,6 +412,9 @@
             ...currentBudget,
             name: $('#budget-name').value,
             client: $('#budget-client').value,
+            location: $('#budget-location').value,
+            advance_pct: Number($('#budget-advance').value) || 0,
+            validity_days: Number($('#budget-validity').value) || 0,
         };
         const validItems = items.filter(i => i.name.trim());
         if (!validItems.length) {

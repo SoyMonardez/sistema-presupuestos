@@ -56,8 +56,21 @@
     </header>
 
     <div class="editor-head">
-        <input type="text" id="budget-name" class="input-title" placeholder="Nombre del presupuesto">
-        <input type="text" id="budget-client" class="input-client" placeholder="Cliente (opcional)">
+        <input type="text" id="budget-name" class="input-title" placeholder="Nombre de la obra">
+        <div class="editor-head-row">
+            <input type="text" id="budget-client" class="input-client" placeholder="Cliente">
+            <input type="text" id="budget-location" class="input-client" placeholder="Ubicación">
+        </div>
+        <div class="editor-head-row pdf-opts">
+            <label class="opt-field">
+                <span>Adelanto %</span>
+                <input type="number" id="budget-advance" inputmode="numeric" min="0" max="100" step="1">
+            </label>
+            <label class="opt-field">
+                <span>Validez (días)</span>
+                <input type="number" id="budget-validity" inputmode="numeric" min="0" step="1">
+            </label>
+        </div>
     </div>
 
     <!-- Dictado / IA -->

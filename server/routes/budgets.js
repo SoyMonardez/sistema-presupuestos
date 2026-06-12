@@ -36,11 +36,14 @@ router.get('/:id', (req, res) => {
 router.put('/:id', (req, res) => {
     const budget = getStmt.get(req.params.id);
     if (!budget) return res.status(404).json({ error: 'No existe' });
-    const name   = String(req.body?.name ?? budget.name).trim() || budget.name;
-    const client = String(req.body?.client ?? budget.client).trim();
-    const notes  = String(req.body?.notes ?? budget.notes);
-    db.prepare(`UPDATE budgets SET name = ?, client = ?, notes = ?, updated_at = datetime('now') WHERE id = ?`)
-      .run(name, client, notes, budget.id);
+    const name     = String(req.body?.name ?? budget.name).trim() || budget.name;
+    const client   = String(req.body?.client ?? budget.client).trim();
+    const notes    = String(req.body?.notes ?? budget.notes);
+    const location = String(req.body?.location ?? budget.location).trim();
+    const validity = Math.max(0, Math.round(Number(req.body?.validity_days ?? budget.validity_days) || 0));
+    const advance  = Math.min(100, Math.max(0, Number(req.body?.advance_pct ?? budget.advance_pct) || 0));
+    db.prepare(`UPDATE budgets SET name = ?, client = ?, notes = ?, location = ?, validity_days = ?, advance_pct = ?, updated_at = datetime('now') WHERE id = ?`)
+      .run(name, client, notes, location, validity, advance, budget.id);
     res.json(getStmt.get(budget.id));
 });
 
@@ -54,7 +57,7 @@ router.delete('/:id', (req, res) => {
 const replaceItems = db.transaction((budgetId, items) => {
     db.prepare('DELETE FROM items WHERE budget_id = ?').run(budgetId);
     const insert = db.prepare(
-        'INSERT INTO items (budget_id, name, quantity, unit, unit_price, position) VALUES (?, ?, ?, ?, ?, ?)'
+        'INSERT INTO items (budget_id, name, quantity, unit, unit_price, position, detail) VALUES (?, ?, ?, ?, ?, ?, ?)'
     );
     items.forEach((item, i) => {
         insert.run(
@@ -63,7 +66,8 @@ const replaceItems = db.transaction((budgetId, items) => {
             Number(item.quantity) || 0,
             String(item.unit || 'un.').trim(),
             Number(item.unit_price) || 0,
-            i
+            i,
+            String(item.detail || '').slice(0, 1000)
         );
     });
     db.prepare(`UPDATE budgets SET updated_at = datetime('now') WHERE id = ?`).run(budgetId);
