@@ -15,6 +15,9 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3002
+    ports:
+      # Acceso directo por IP sin dominio: http://IP_DEL_VPS:3002
+      - "3002:3002"
     volumes:
       # La DB SQLite vive acá — sobrevive rebuilds
       - presupuestos_data:/app/data
