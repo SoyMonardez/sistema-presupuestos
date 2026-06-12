@@ -34,4 +34,15 @@ CREATE TABLE IF NOT EXISTS items (
 CREATE INDEX IF NOT EXISTS idx_items_budget ON items(budget_id);
 `);
 
+// Migraciones simples: agrega columnas si faltan (la DB puede venir de una versión anterior)
+function addColumnIfMissing(table, column, ddl) {
+    const exists = db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`).get(table, column);
+    if (!exists) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+}
+
+addColumnIfMissing('budgets', 'location',      `location TEXT NOT NULL DEFAULT ''`);
+addColumnIfMissing('budgets', 'validity_days', `validity_days INTEGER NOT NULL DEFAULT 10`);
+addColumnIfMissing('budgets', 'advance_pct',   `advance_pct REAL NOT NULL DEFAULT 25`);
+addColumnIfMissing('items',   'detail',        `detail TEXT NOT NULL DEFAULT ''`);
+
 export default db;

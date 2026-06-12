@@ -7,8 +7,9 @@ const router = Router();
 const PARSE_SYSTEM = `Sos un presupuestista experto en construcción y refacciones en Argentina. Convertís descripciones habladas o escritas de trabajos en items de presupuesto. El usuario dicta por voz, así que el texto puede venir desprolijo, sin puntuación y con jerga.
 
 Reglas:
-- Devolvé SOLO un JSON con esta forma exacta: {"items":[{"name":"...","quantity":N,"unit":"...","unit_price":N}]}
-- "name": nombre claro y profesional del item, con mayúscula inicial (ej: "Demolición de pared de ladrillo", "Mano de obra").
+- Devolvé SOLO un JSON con esta forma exacta: {"items":[{"name":"...","detail":"...","quantity":N,"unit":"...","unit_price":N}]}
+- "name": nombre claro y profesional del item, con mayúscula inicial (ej: "Demolición de pared de ladrillo", "Construcción de Tabiquería Interior").
+- "detail": especificaciones del item, una por línea separadas con \\n (ej: "Medidas: 10.00 m lineales x 2.50 m de alto\\nEstructura: Zapata corrida y columnas de amarre"). Incluí acá medidas, materiales y aclaraciones que mencione el usuario. Si no hay detalles, usar "".
 - "quantity": número. Si no se menciona, usar 1.
 - "unit": unidad de medida. Usá: "m²" (metros cuadrados), "m" (metros lineales), "un." (unidades), "kg", "lt", "hs" (horas), "saco", "día", "global". Si no está claro, "un.".
 - "unit_price": precio unitario en pesos argentinos, número sin separadores.
@@ -58,6 +59,7 @@ router.post('/parse', async (req, res) => {
 
         const items = Array.isArray(result.items) ? result.items.slice(0, 50).map(i => ({
             name: String(i.name || '').slice(0, 120) || 'Item',
+            detail: String(i.detail || '').slice(0, 1000),
             quantity: Number(i.quantity) || 1,
             unit: String(i.unit || 'un.').slice(0, 20),
             unit_price: Number(i.unit_price) || 0,
