@@ -349,6 +349,38 @@ body {
 }
 .item-remove:hover { color: var(--red); background: rgba(232,93,93,.1); }
 
+/* ============ Precios base ============ */
+.hint-msg {
+    color: var(--text-dim);
+    font-size: 13.5px;
+    line-height: 1.5;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    margin-bottom: 16px;
+}
+.prices-header, .price-row { grid-template-columns: 1fr 70px 110px 36px; }
+.price-row {
+    display: grid;
+    gap: 6px;
+    align-items: center;
+}
+.price-row input {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 15px;
+    padding: 11px 9px;
+    min-width: 0;
+}
+.price-row input:focus { outline: none; border-color: var(--primary); }
+.price-row input[type=number] { -moz-appearance: textfield; }
+.price-row input::-webkit-outer-spin-button,
+.price-row input::-webkit-inner-spin-button { -webkit-appearance: none; }
+
 /* ============ Sugerencias IA ============ */
 .suggest-box {
     position: fixed;

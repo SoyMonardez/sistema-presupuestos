@@ -34,6 +34,9 @@
 <section id="view-list" class="view" hidden>
     <header class="topbar">
         <h1>Mis presupuestos</h1>
+        <button id="btn-prices" class="btn-icon" title="Precios base">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+        </button>
         <button id="btn-logout" class="btn-icon" title="Salir">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
         </button>
@@ -42,6 +45,30 @@
     <p id="list-empty" class="empty-msg" hidden>Todavía no tenés presupuestos.<br>Tocá el botón para crear el primero.</p>
     <button id="btn-new" class="fab" title="Nuevo presupuesto">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" width="28" height="28"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </button>
+</section>
+
+<!-- ============ PRECIOS BASE ============ -->
+<section id="view-prices" class="view" hidden>
+    <header class="topbar">
+        <button id="btn-prices-back" class="btn-icon" title="Volver">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="24" height="24"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <h1>Precios base</h1>
+        <span id="prices-status" class="save-status" style="flex:0 0 auto"></span>
+    </header>
+    <p class="hint-msg">Tu tarifario de referencia: la IA usa estos precios como base obligatoria al armar presupuestos. Ej: "Hormigón H21 — m³ — $180.000", "Hora de oficial albañil — hs — $9.500".</p>
+
+    <div class="items-header prices-header">
+        <span>Material / Trabajo</span>
+        <span class="col-unit">Unidad</span>
+        <span class="col-price">Precio</span>
+        <span class="col-x"></span>
+    </div>
+    <div id="prices-list" class="items-list"></div>
+    <button id="btn-add-price" class="btn btn-ghost btn-block">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" width="18" height="18"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Agregar precio
     </button>
 </section>
 

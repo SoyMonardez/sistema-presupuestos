@@ -6,6 +6,7 @@
         login:  $('#view-login'),
         list:   $('#view-list'),
         editor: $('#view-editor'),
+        prices: $('#view-prices'),
     };
 
     let currentBudget = null;   // { id, name, client, notes }
@@ -87,6 +88,75 @@
         const budget = await API.createBudget({ name: 'Nuevo presupuesto' });
         await openEditor(budget.id);
         $('#budget-name').select();
+    });
+
+    // ================= Precios base =================
+    let prices = [];
+    let pricesTimer = null;
+
+    async function openPrices() {
+        prices = (await API.getPrices()).map(p => ({ name: p.name, unit: p.unit, price: p.price }));
+        renderPrices();
+        show('prices');
+    }
+
+    function schedulePricesSave() {
+        $('#prices-status').textContent = 'Guardando…';
+        clearTimeout(pricesTimer);
+        pricesTimer = setTimeout(async () => {
+            try {
+                await API.savePrices(prices);
+                $('#prices-status').textContent = 'Guardado';
+                setTimeout(() => { if ($('#prices-status').textContent === 'Guardado') $('#prices-status').textContent = ''; }, 1500);
+            } catch (err) {
+                $('#prices-status').textContent = '';
+                toast('No se pudo guardar: ' + err.message, true);
+            }
+        }, 900);
+    }
+
+    function renderPrices() {
+        const listEl = $('#prices-list');
+        listEl.innerHTML = '';
+        prices.forEach((price, index) => {
+            const row = document.createElement('div');
+            row.className = 'price-row';
+            row.innerHTML = `
+                <input type="text" class="p-name" placeholder="Ej: Hormigón H21" autocomplete="off">
+                <input type="text" class="p-unit" autocomplete="off">
+                <input type="number" class="p-price" inputmode="numeric" min="0" step="any" placeholder="$">
+                <button class="item-remove" title="Quitar">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="18" height="18"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>`;
+            const nameEl  = row.querySelector('.p-name');
+            const unitEl  = row.querySelector('.p-unit');
+            const priceEl = row.querySelector('.p-price');
+            nameEl.value  = price.name;
+            unitEl.value  = price.unit;
+            priceEl.value = price.price || '';
+            nameEl.addEventListener('input',  () => { price.name = nameEl.value; schedulePricesSave(); });
+            unitEl.addEventListener('input',  () => { price.unit = unitEl.value; schedulePricesSave(); });
+            priceEl.addEventListener('input', () => { price.price = Number(priceEl.value) || 0; schedulePricesSave(); });
+            row.querySelector('.item-remove').addEventListener('click', () => {
+                prices.splice(index, 1);
+                renderPrices();
+                schedulePricesSave();
+            });
+            listEl.appendChild(row);
+        });
+    }
+
+    $('#btn-prices').addEventListener('click', () => openPrices().catch(err => toast(err.message, true)));
+    $('#btn-prices-back').addEventListener('click', async () => {
+        clearTimeout(pricesTimer);
+        try { await API.savePrices(prices); } catch {}
+        await openList();
+    });
+    $('#btn-add-price').addEventListener('click', () => {
+        prices.push({ name: '', unit: 'un.', price: 0 });
+        renderPrices();
+        const inputs = document.querySelectorAll('#prices-list .p-name');
+        inputs[inputs.length - 1]?.focus();
     });
 
     // ================= Editor =================

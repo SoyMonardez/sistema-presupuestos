@@ -1,6 +1,7 @@
 import express from 'express';
 import { Router } from 'express';
 import { callGroq, transcribeAudio } from '../groq.js';
+import { priceRefsPromptBlock } from './prices.js';
 
 const router = Router();
 
@@ -53,7 +54,7 @@ router.post('/parse', async (req, res) => {
 
     try {
         const result = await callGroq([
-            { role: 'system', content: PARSE_SYSTEM },
+            { role: 'system', content: PARSE_SYSTEM + priceRefsPromptBlock() },
             { role: 'user', content: text },
         ], { temperature: 0.2, maxTokens: 1500 });
 
@@ -81,7 +82,7 @@ router.post('/suggest', async (req, res) => {
 
     try {
         const result = await callGroq([
-            { role: 'system', content: SUGGEST_SYSTEM },
+            { role: 'system', content: SUGGEST_SYSTEM + priceRefsPromptBlock() },
             { role: 'user', content: `Items ya cargados: ${context.length ? context.join(', ') : '(ninguno)'}\nEl usuario está escribiendo: "${query.slice(0, 120)}"` },
         ], { temperature: 0.4, maxTokens: 400 });
 
