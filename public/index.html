@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="theme-color" content="#1a1d29">
+<title>Presupuestos</title>
+<link rel="stylesheet" href="css/app.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
+</head>
+<body>
+
+<!-- ============ LOGIN ============ -->
+<section id="view-login" class="view">
+    <div class="login-box">
+        <div class="login-logo">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="46" height="46"><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="12" y2="15"/></svg>
+        </div>
+        <h1>Presupuestos</h1>
+        <p class="login-sub">Ingresá tu contraseña para entrar</p>
+        <form id="login-form">
+            <input type="password" id="login-password" placeholder="Contraseña" autocomplete="current-password" required>
+            <p id="login-error" class="error-msg" hidden></p>
+            <button type="submit" class="btn btn-primary btn-block">Entrar</button>
+        </form>
+    </div>
+</section>
+
+<!-- ============ LISTA ============ -->
+<section id="view-list" class="view" hidden>
+    <header class="topbar">
+        <h1>Mis presupuestos</h1>
+        <button id="btn-logout" class="btn-icon" title="Salir">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        </button>
+    </header>
+    <div id="budget-list" class="budget-list"></div>
+    <p id="list-empty" class="empty-msg" hidden>Todavía no tenés presupuestos.<br>Tocá el botón para crear el primero.</p>
+    <button id="btn-new" class="fab" title="Nuevo presupuesto">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" width="28" height="28"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </button>
+</section>
+
+<!-- ============ EDITOR ============ -->
+<section id="view-editor" class="view" hidden>
+    <header class="topbar">
+        <button id="btn-back" class="btn-icon" title="Volver">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="24" height="24"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <span id="save-status" class="save-status"></span>
+        <button id="btn-delete" class="btn-icon btn-icon-danger" title="Borrar presupuesto">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+    </header>
+
+    <div class="editor-head">
+        <input type="text" id="budget-name" class="input-title" placeholder="Nombre del presupuesto">
+        <input type="text" id="budget-client" class="input-client" placeholder="Cliente (opcional)">
+    </div>
+
+    <!-- Dictado / IA -->
+    <div class="ai-bar">
+        <button id="btn-voice" class="btn btn-voice">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+            <span id="voice-label">Dictar items</span>
+        </button>
+        <button id="btn-ai-text" class="btn btn-secondary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3L12 3z"/></svg>
+            Escribir y convertir
+        </button>
+    </div>
+
+    <!-- Panel de texto libre → IA -->
+    <div id="ai-panel" class="ai-panel" hidden>
+        <textarea id="ai-text" rows="3" placeholder="Ej: 20 metros cuadrados de cerámica a 15 lucas el metro, 3 sacos de cemento a 12 mil y un día de mano de obra 80 mil"></textarea>
+        <div class="ai-panel-actions">
+            <button id="btn-ai-cancel" class="btn btn-ghost">Cancelar</button>
+            <button id="btn-ai-send" class="btn btn-primary">Convertir en items</button>
+        </div>
+    </div>
+
+    <!-- Borrador de items detectados por la IA -->
+    <div id="draft-panel" class="draft-panel" hidden>
+        <p class="draft-title">La IA detectó estos items — revisalos antes de agregar:</p>
+        <div id="draft-list"></div>
+        <div class="ai-panel-actions">
+            <button id="btn-draft-cancel" class="btn btn-ghost">Descartar</button>
+            <button id="btn-draft-add" class="btn btn-primary">Agregar todos</button>
+        </div>
+    </div>
+
+    <!-- Tabla de items -->
+    <div class="items-header">
+        <span class="col-name">Item</span>
+        <span class="col-qty">Cant.</span>
+        <span class="col-unit">Unidad</span>
+        <span class="col-price">Precio unit.</span>
+        <span class="col-x"></span>
+    </div>
+    <div id="items-list" class="items-list"></div>
+    <button id="btn-add-item" class="btn btn-ghost btn-block">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" width="18" height="18"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Agregar item
+    </button>
+
+    <div id="suggest-box" class="suggest-box" hidden></div>
+
+    <!-- Total + PDF -->
+    <footer class="totalbar">
+        <div class="total-info">
+            <span class="total-label">TOTAL</span>
+            <span id="total-amount" class="total-amount">$0</span>
+        </div>
+        <button id="btn-pdf" class="btn btn-primary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 18 15 15"/></svg>
+            PDF
+        </button>
+    </footer>
+</section>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="js/format.js"></script>
+<script src="js/api.js"></script>
+<script src="js/voice.js"></script>
+<script src="js/pdf.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

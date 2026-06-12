@@ -1,0 +1,32 @@
+# Sistema de Presupuestos — un solo container.
+#
+# Uso en el VPS:
+#   1. cp .env.example .env  (completar valores)
+#   2. docker compose up -d --build
+#   3. En Nginx Proxy Manager: proxy host → presupuestos.tudominio.com → presupuestos-app:3002
+#      (NPM y este container comparten la red externa nginx_network)
+
+services:
+  app:
+    build: .
+    container_name: presupuestos-app
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: 3002
+    volumes:
+      # La DB SQLite vive acá — sobrevive rebuilds
+      - presupuestos_data:/app/data
+    networks:
+      - npm
+
+volumes:
+  presupuestos_data:
+    driver: local
+
+networks:
+  # Red del Nginx Proxy Manager del VPS (la misma que usa el portfolio)
+  npm:
+    external: true
+    name: nginx_network
