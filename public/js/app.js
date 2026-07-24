@@ -11,7 +11,7 @@
 
     let currentBudget = null;   // { id, name, client, notes }
     let items = [];             // [{ name, quantity, unit, unit_price }]
-    let draftItems = [];        // items propuestos por la IA, pendientes de confirmar
+    let draftOps = [];          // operaciones (agregar/editar/borrar) propuestas por la IA, pendientes de confirmar
     let saveTimer = null;
     let suggestTimer = null;
     let suggestTarget = null;   // input de nombre activo para sugerencias
@@ -30,6 +30,55 @@
         el.hidden = false;
         clearTimeout(toast._t);
         toast._t = setTimeout(() => { el.hidden = true; }, 3200);
+    }
+
+    // ===== Helpers de números (para leer fácil aunque tengan muchos ceros) =====
+    // Monto en palabras: 660000 -> "seiscientos sesenta mil pesos"
+    function enLetras(value) {
+        const n = Math.floor(Math.abs(Number(value) || 0));
+        if (!n || typeof numeroALetras !== 'function') return '';
+        return numeroALetras(n).toLowerCase() + ' pesos';
+    }
+    // Formatea un texto de plata con separadores de miles: "1500000" -> "1.500.000"
+    function fmtMoneyInput(raw) {
+        raw = String(raw).replace(/[^\d,]/g, '');
+        const i = raw.indexOf(',');
+        let intPart = (i >= 0 ? raw.slice(0, i) : raw).replace(/^0+(?=\d)/, '');
+        intPart = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+        let out = intPart;
+        if (i >= 0) out += ',' + raw.slice(i + 1).replace(/,/g, '').slice(0, 2);
+        return out;
+    }
+    // Convierte un texto "1.500.000,50" a número 1500000.5 (punto = miles, coma = decimal)
+    function parseNum(str) {
+        str = String(str).replace(/\./g, '').replace(',', '.').replace(/[^\d.]/g, '');
+        return Number(str) || 0;
+    }
+    // Cantidad: acepta coma o punto como decimal (1,5 o 1.5 → 1.5) y miles con punto (1.090 → 1090)
+    function parseQty(str) {
+        str = String(str).trim().replace(/[^\d.,]/g, '');
+        if (str.includes(',')) {
+            str = str.replace(/\./g, '').replace(',', '.');   // coma = decimal, puntos = miles
+        } else {
+            const dots = (str.match(/\./g) || []).length;
+            if (dots > 1) {
+                str = str.replace(/\./g, '');                 // varios puntos = miles
+            } else if (dots === 1 && str.split('.')[1].length === 3) {
+                str = str.replace('.', '');                   // "1.090" = 1090 (miles), no 1,09
+            }                                                 // un punto con 1-2 decimales = decimal
+        }
+        return Number(str) || 0;
+    }
+    // Número JS -> texto de input formateado (660000 -> "660.000")
+    function numToInput(n) {
+        if (!n) return '';
+        return fmtMoneyInput(String(n).replace('.', ','));
+    }
+    // Crece la altura de un textarea según el contenido
+    function autoGrow(el) {
+        if (!el || el.offsetParent === null || el.clientWidth < 40) return; // sin layout válido todavía
+        el.style.height = 'auto';
+        el.style.height = Math.min(Math.max(el.scrollHeight, 22), 520) + 'px';
     }
 
     // ================= Login =================
@@ -165,6 +214,9 @@
         currentBudget = {
             id: data.id, name: data.name, client: data.client, notes: data.notes,
             location: data.location || '', validity_days: data.validity_days ?? 10, advance_pct: data.advance_pct ?? 25,
+            format: data.format === 'municipal' ? 'municipal' : 'original',
+            client_role: data.client_role || '', client_address: data.client_address || '',
+            client_cp: data.client_cp || '', client_phone: data.client_phone || '', client_email: data.client_email || '',
         };
         items = data.items.map(i => ({ name: i.name, detail: i.detail || '', quantity: i.quantity, unit: i.unit, unit_price: i.unit_price }));
         $('#budget-name').value = data.name;
@@ -172,11 +224,112 @@
         $('#budget-location').value = currentBudget.location;
         $('#budget-advance').value = currentBudget.advance_pct;
         $('#budget-validity').value = currentBudget.validity_days;
+        $('#budget-client-role').value = currentBudget.client_role;
+        $('#budget-client-address').value = currentBudget.client_address;
+        $('#budget-client-cp').value = currentBudget.client_cp;
+        $('#budget-client-phone').value = currentBudget.client_phone;
+        $('#budget-client-email').value = currentBudget.client_email;
+        applyFormatUI(currentBudget.format);
         hideDraft();
         hideAIPanel();
         renderItems();
         show('editor');
     }
+
+    // ================= Formato del PDF =================
+    function applyFormatUI(format) {
+        const muni = format === 'municipal';
+        document.querySelectorAll('.format-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.format === format);
+        });
+        // Campos exclusivos del formato cliente (ubicación, adelanto, validez)
+        document.querySelectorAll('.orig-only').forEach(el => { el.hidden = muni; });
+        // Campos exclusivos del formato municipio
+        $('#municipal-fields').hidden = !muni;
+        const hint = $('#format-hint');
+        if (hint) hint.textContent = muni
+            ? 'Formato formal blanco y negro, para presentar al municipio.'
+            : 'Formato con color, para clientes particulares (casas, refacciones).';
+    }
+
+    document.querySelectorAll('.format-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (!currentBudget) return;
+            currentBudget.format = btn.dataset.format;
+            applyFormatUI(currentBudget.format);
+            scheduleSave();
+        });
+    });
+
+    $('#budget-client-role').addEventListener('input', scheduleSave);
+    $('#budget-client-address').addEventListener('input', scheduleSave);
+    $('#budget-client-cp').addEventListener('input', scheduleSave);
+    $('#budget-client-phone').addEventListener('input', scheduleSave);
+    $('#budget-client-email').addEventListener('input', scheduleSave);
+
+    // ===== Autocompletar datos del cliente (formato municipio) =====
+    // Clientes conocidos: se completan al instante, sin IA y sin riesgo de error.
+    const KNOWN_CLIENTS = [
+        {
+            match: ['municipalidad de la capital', 'municipalidad de capital', 'muni capital', 'municipalidad capital'],
+            data: { role: 'Dra. Susana Laciar', address: '', cp: 'J5402', phone: '264 6 317574', email: '' },
+        },
+    ];
+    function findKnownClient(name) {
+        const n = (name || '').toLowerCase().trim();
+        if (!n) return null;
+        return (KNOWN_CLIENTS.find(c => c.match.some(m => n.includes(m))) || {}).data || null;
+    }
+    function applyClientData(d, onlyEmpty) {
+        const map = {
+            role: '#budget-client-role', address: '#budget-client-address',
+            cp: '#budget-client-cp', phone: '#budget-client-phone', email: '#budget-client-email',
+        };
+        let filled = 0;
+        for (const [k, sel] of Object.entries(map)) {
+            const el = $(sel);
+            const val = d[k] || '';
+            if (!val) continue;
+            if (onlyEmpty && el.value.trim()) continue;
+            if (el.value !== val) { el.value = val; filled++; }
+        }
+        if (filled) scheduleSave();
+        return filled;
+    }
+
+    // Auto: al salir del campo "Nombre del cliente", si es conocido completa lo que esté vacío
+    $('#budget-client').addEventListener('blur', () => {
+        if (!currentBudget || currentBudget.format !== 'municipal') return;
+        const known = findKnownClient($('#budget-client').value);
+        if (known) applyClientData(known, true);
+    });
+
+    // Botón "Completar datos automáticamente": clientes conocidos al instante, el resto con IA
+    $('#btn-client-ai').addEventListener('click', async () => {
+        const name = $('#budget-client').value.trim();
+        if (!name) { toast('Primero escribí el nombre del cliente', true); return; }
+        const known = findKnownClient(name);
+        if (known) {
+            const n = applyClientData(known, false);
+            toast(n ? 'Datos del cliente completados' : 'Los datos ya estaban cargados');
+            return;
+        }
+        const btn = $('#btn-client-ai');
+        const lbl = btn.querySelector('span');
+        const prev = lbl.textContent;
+        btn.disabled = true;
+        lbl.textContent = 'Buscando con IA…';
+        try {
+            const d = await API.aiClientData(name);
+            const n = applyClientData(d, false);
+            toast(n ? 'Datos completados con IA' : 'No encontré datos oficiales de ese cliente', !n);
+        } catch (err) {
+            toast(err.message, true);
+        } finally {
+            btn.disabled = false;
+            lbl.textContent = prev;
+        }
+    });
 
     $('#btn-back').addEventListener('click', async () => {
         await flushSave();
@@ -208,6 +361,12 @@
                 location: $('#budget-location').value,
                 advance_pct: Number($('#budget-advance').value) || 0,
                 validity_days: Number($('#budget-validity').value) || 0,
+                format: currentBudget.format || 'original',
+                client_role: $('#budget-client-role').value,
+                client_address: $('#budget-client-address').value,
+                client_cp: $('#budget-client-cp').value,
+                client_phone: $('#budget-client-phone').value,
+                client_email: $('#budget-client-email').value,
             });
             await API.saveItems(currentBudget.id, items);
             $('#save-status').textContent = 'Guardado';
@@ -229,77 +388,90 @@
         const listEl = $('#items-list');
         listEl.innerHTML = '';
         items.forEach((item, index) => {
-            const row = document.createElement('div');
-            row.className = 'item-row';
-            row.innerHTML = `
-                <input type="text" class="f-name" placeholder="Descripción" autocomplete="off">
-                <input type="number" class="f-qty" inputmode="decimal" min="0" step="any">
-                <input type="text" class="f-unit" autocomplete="off">
-                <input type="number" class="f-price" inputmode="numeric" min="0" step="any">
-                <button class="item-remove" title="Quitar">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="18" height="18"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </button>
-                <div class="item-extra">
-                    <button class="item-detail-toggle" title="Detalles del item">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
-                        <span class="detail-label">Detalles</span>
+            const card = document.createElement('div');
+            card.className = 'item-card';
+            card.innerHTML = `
+                <div class="ic-top">
+                    <span class="ic-num">${index + 1}</span>
+                    <button class="ic-desc" type="button">
+                        <span class="ic-desc-text"></span>
                     </button>
-                    <span class="item-subtotal"></span>
+                    <button class="ic-remove" title="Quitar item" aria-label="Quitar item">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="20" height="20"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
                 </div>
-                <textarea class="f-detail" rows="2" placeholder="Especificaciones (una por línea — salen como viñetas en el PDF)" hidden></textarea>`;
+                <div class="ic-fields">
+                    <label class="ic-field"><span>Cantidad</span><input type="text" inputmode="decimal" class="f-qty" placeholder="1"></label>
+                    <label class="ic-field"><span>Unidad</span><input type="text" class="f-unit" placeholder="un." autocomplete="off"></label>
+                    <label class="ic-field ic-field-price"><span>Precio por unidad</span><input type="text" inputmode="numeric" class="f-price" placeholder="$ 0"></label>
+                </div>
+                <div class="ic-foot">
+                    <div class="ic-foot-btns">
+                        <button class="ic-detail-toggle" type="button">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                            <span class="detail-label">Detalles</span>
+                        </button>
+                        <button class="ic-convert-toggle" type="button" title="Convertir unidad">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+                            <span class="detail-label">Convertir</span>
+                        </button>
+                    </div>
+                    <div class="ic-subtotal">
+                        <span class="ic-sub-amount"></span>
+                        <span class="ic-sub-words"></span>
+                    </div>
+                </div>`;
 
-            const nameEl   = row.querySelector('.f-name');
-            const qtyEl    = row.querySelector('.f-qty');
-            const unitEl   = row.querySelector('.f-unit');
-            const priceEl  = row.querySelector('.f-price');
-            const subEl    = row.querySelector('.item-subtotal');
-            const detailEl = row.querySelector('.f-detail');
-            const toggleEl = row.querySelector('.item-detail-toggle');
+            const descBtn  = card.querySelector('.ic-desc');
+            const descText = card.querySelector('.ic-desc-text');
+            const qtyEl    = card.querySelector('.f-qty');
+            const unitEl   = card.querySelector('.f-unit');
+            const priceEl  = card.querySelector('.f-price');
+            const subAmt   = card.querySelector('.ic-sub-amount');
+            const subWords = card.querySelector('.ic-sub-words');
+            const toggleEl = card.querySelector('.ic-detail-toggle');
 
-            nameEl.value  = item.name;
-            qtyEl.value   = item.quantity || '';
-            unitEl.value  = item.unit;
-            priceEl.value = item.unit_price || '';
-            subEl.textContent = 'Subtotal: ' + formatARS(item.quantity * item.unit_price);
-            detailEl.value = item.detail || '';
-            if (item.detail) {
-                detailEl.hidden = false;
-                toggleEl.classList.add('active');
+            function refreshSub() {
+                const sub = item.quantity * item.unit_price;
+                subAmt.textContent = formatARS(sub);
+                subWords.textContent = enLetras(sub);
             }
 
-            toggleEl.addEventListener('click', () => {
-                detailEl.hidden = !detailEl.hidden;
-                toggleEl.classList.toggle('active', !detailEl.hidden);
-                if (!detailEl.hidden) detailEl.focus();
-            });
-            detailEl.addEventListener('input', () => { item.detail = detailEl.value; scheduleSave(); });
+            if (item.name && item.name.trim()) {
+                descText.textContent = item.name;
+                descBtn.classList.remove('empty');
+            } else {
+                descText.textContent = 'Tocá para escribir la descripción';
+                descBtn.classList.add('empty');
+            }
+            qtyEl.value   = item.quantity ? String(item.quantity).replace('.', ',') : '';
+            unitEl.value  = item.unit;
+            priceEl.value = numToInput(item.unit_price);
+            if (item.detail && item.detail.trim()) toggleEl.classList.add('active');
+            refreshSub();
 
-            nameEl.addEventListener('input', () => {
-                item.name = nameEl.value;
-                scheduleSave();
-                scheduleSuggest(nameEl, item);
-            });
-            nameEl.addEventListener('blur', () => setTimeout(hideSuggest, 250));
+            // Tocar la descripción o "Detalles" abre la ventana modal
+            descBtn.addEventListener('click', () => openItemModal(index, 'name'));
+            toggleEl.addEventListener('click', () => openItemModal(index, 'detail'));
+            card.querySelector('.ic-convert-toggle').addEventListener('click', () => openConvertModal(index));
+
             qtyEl.addEventListener('input', () => {
-                item.quantity = Number(qtyEl.value) || 0;
-                subEl.textContent = 'Subtotal: ' + formatARS(item.quantity * item.unit_price);
-                updateTotal();
-                scheduleSave();
+                item.quantity = parseQty(qtyEl.value);
+                refreshSub(); updateTotal(); scheduleSave();
             });
             unitEl.addEventListener('input', () => { item.unit = unitEl.value; scheduleSave(); });
             priceEl.addEventListener('input', () => {
-                item.unit_price = Number(priceEl.value) || 0;
-                subEl.textContent = 'Subtotal: ' + formatARS(item.quantity * item.unit_price);
-                updateTotal();
-                scheduleSave();
+                priceEl.value = fmtMoneyInput(priceEl.value);
+                item.unit_price = parseNum(priceEl.value);
+                refreshSub(); updateTotal(); scheduleSave();
             });
-            row.querySelector('.item-remove').addEventListener('click', () => {
+            card.querySelector('.ic-remove').addEventListener('click', () => {
                 items.splice(index, 1);
                 renderItems();
                 scheduleSave();
             });
 
-            listEl.appendChild(row);
+            listEl.appendChild(card);
         });
         updateTotal();
     }
@@ -307,16 +479,161 @@
     function updateTotal() {
         const total = items.reduce((sum, i) => sum + (i.quantity * i.unit_price || 0), 0);
         $('#total-amount').textContent = formatARS(total);
+        const w = $('#total-words');
+        if (w) w.textContent = enLetras(total);
     }
 
     $('#btn-add-item').addEventListener('click', () => {
         items.push({ name: '', detail: '', quantity: 1, unit: 'un.', unit_price: 0 });
         renderItems();
-        const inputs = document.querySelectorAll('#items-list .f-name');
-        inputs[inputs.length - 1]?.focus();
+        openItemModal(items.length - 1, 'name');
     });
 
-    // ================= Sugerencias IA =================
+    // ================= Modal de descripción del item =================
+    let modalIndex = -1;
+    function openItemModal(index, focusField) {
+        if (index < 0 || index >= items.length) return;
+        modalIndex = index;
+        const item = items[index];
+        const nameEl = $('#item-modal-name');
+        const detailEl = $('#item-modal-detail');
+        nameEl.value = item.name || '';
+        detailEl.value = item.detail || '';
+        hideSuggest();
+        $('#item-modal').hidden = false;
+        document.body.classList.add('modal-open');
+        requestAnimationFrame(() => {
+            autoGrow(nameEl); autoGrow(detailEl);
+            (focusField === 'detail' ? detailEl : nameEl).focus();
+        });
+    }
+    function closeItemModal() {
+        $('#item-modal').hidden = true;
+        document.body.classList.remove('modal-open');
+        hideSuggest();
+        modalIndex = -1;
+        renderItems();   // refresca el texto de las tarjetas
+    }
+
+    $('#item-modal-name').addEventListener('input', () => {
+        if (modalIndex < 0) return;
+        const el = $('#item-modal-name');
+        items[modalIndex].name = el.value;
+        autoGrow(el);
+        scheduleSave();
+        scheduleSuggest(el, items[modalIndex]);
+    });
+    $('#item-modal-detail').addEventListener('input', () => {
+        if (modalIndex < 0) return;
+        const el = $('#item-modal-detail');
+        items[modalIndex].detail = el.value;
+        autoGrow(el);
+        scheduleSave();
+    });
+    $('#item-modal-done').addEventListener('click', closeItemModal);
+    $('#item-modal-close').addEventListener('click', closeItemModal);
+    $('#item-modal').addEventListener('click', (e) => { if (e.target.id === 'item-modal') closeItemModal(); });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !$('#item-modal').hidden) closeItemModal();
+    });
+
+    // ================= Modal de conversión de unidades =================
+    // Dado un precio total fijo (el trabajo que se cobra) + medidas de 1 pieza + cantidad
+    // de piezas, calcula cuánto sería la cantidad y el precio por m, m², m³ o unidad —
+    // sin que el total cambie. Evita que haya que sacar la cuenta con calculadora aparte.
+    let convertIndex = -1;
+    function openConvertModal(index) {
+        if (index < 0 || index >= items.length) return;
+        convertIndex = index;
+        const item = items[index];
+        const total = (item.quantity * item.unit_price) || 0;
+        $('#conv-total').value = total ? numToInput(total) : '';
+        $('#conv-pieces').value = '1';
+        $('#conv-largo').value = '';
+        $('#conv-ancho').value = '';
+        $('#conv-alto').value = '';
+        renderConvertResults();
+        $('#convert-modal').hidden = false;
+        document.body.classList.add('modal-open');
+        requestAnimationFrame(() => $('#conv-total').focus());
+    }
+    function closeConvertModal() {
+        $('#convert-modal').hidden = true;
+        document.body.classList.remove('modal-open');
+        convertIndex = -1;
+    }
+
+    const CONVERT_UNITS = [
+        { key: 'lineal', label: 'Metro lineal', unit: 'm',  dims: ['largo'] },
+        { key: 'area',   label: 'Metro cuadrado', unit: 'm²', dims: ['largo', 'ancho'] },
+        { key: 'volumen', label: 'Metro cúbico', unit: 'm³', dims: ['largo', 'ancho', 'alto'] },
+        { key: 'unidad', label: 'Por unidad', unit: 'un.', dims: [] },
+    ];
+
+    function renderConvertResults() {
+        const box = $('#convert-results');
+        const total  = parseNum($('#conv-total').value);
+        const pieces = parseQty($('#conv-pieces').value) || 0;
+        const dims = {
+            largo: parseQty($('#conv-largo').value) || 0,
+            ancho: parseQty($('#conv-ancho').value) || 0,
+            alto:  parseQty($('#conv-alto').value) || 0,
+        };
+        box.innerHTML = '';
+        CONVERT_UNITS.forEach(u => {
+            const ready = pieces > 0 && u.dims.every(d => dims[d] > 0);
+            let qty = 0;
+            if (ready) {
+                qty = pieces;
+                u.dims.forEach(d => { qty *= dims[d]; });
+                qty = Math.round(qty * 1e6) / 1e6; // corta el ruido de coma flotante (0.8*0.5*0.15 etc.)
+            }
+            const unitPrice = (ready && total > 0 && qty > 0) ? Math.round((total / qty) * 100) / 100 : 0;
+
+            const row = document.createElement('div');
+            row.className = 'convert-row' + (ready ? '' : ' convert-row-disabled');
+            row.innerHTML = `
+                <div class="convert-row-info">
+                    <span class="convert-row-label">${u.label} (${u.unit})</span>
+                    <span class="convert-row-detail">${ready ? `${formatQty(qty)} ${u.unit} · ${formatARS(unitPrice)}/${u.unit}` : 'Faltan medidas'}</span>
+                </div>
+                <button type="button" class="convert-row-use" ${ready ? '' : 'disabled'}>Usar</button>`;
+            row.querySelector('.convert-row-use').addEventListener('click', () => {
+                if (convertIndex < 0) return;
+                const item = items[convertIndex];
+                item.quantity = qty;
+                item.unit = u.unit;
+                item.unit_price = unitPrice;
+                closeConvertModal();
+                renderItems();
+                scheduleSave();
+                toast('Unidad convertida a ' + u.unit);
+            });
+            box.appendChild(row);
+        });
+    }
+
+    function formatQty(n) {
+        return (Math.round(n * 100) / 100).toString().replace('.', ',');
+    }
+
+    ['#conv-total'].forEach(sel => {
+        $(sel).addEventListener('input', () => {
+            const el = $(sel);
+            el.value = fmtMoneyInput(el.value);
+            renderConvertResults();
+        });
+    });
+    ['#conv-pieces', '#conv-largo', '#conv-ancho', '#conv-alto'].forEach(sel => {
+        $(sel).addEventListener('input', renderConvertResults);
+    });
+    $('#convert-modal-close').addEventListener('click', closeConvertModal);
+    $('#convert-modal').addEventListener('click', (e) => { if (e.target.id === 'convert-modal') closeConvertModal(); });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !$('#convert-modal').hidden) closeConvertModal();
+    });
+
+    // ================= Sugerencias IA (dentro de la modal) =================
     function scheduleSuggest(inputEl, item) {
         clearTimeout(suggestTimer);
         hideSuggest();
@@ -326,17 +643,17 @@
             try {
                 const { suggestions } = await API.aiSuggest(query, items);
                 if (!suggestions.length || document.activeElement !== inputEl) return;
-                showSuggest(suggestions, inputEl, item);
+                showSuggest(suggestions, item);
             } catch { /* sugerencias son best-effort */ }
         }, 600);
     }
 
-    function showSuggest(suggestions, inputEl, item) {
-        const box = $('#suggest-box');
+    function showSuggest(suggestions, item) {
+        const box = $('#item-modal-suggest');
         box.innerHTML = '';
-        suggestTarget = inputEl;
         for (const s of suggestions) {
             const chip = document.createElement('button');
+            chip.type = 'button';
             chip.className = 'suggest-chip';
             chip.innerHTML = `<span></span><span class="suggest-chip-price"></span>`;
             chip.firstChild.textContent = `${s.name} (${s.unit})`;
@@ -346,7 +663,8 @@
                 item.name = s.name;
                 item.unit = s.unit;
                 if (!item.unit_price && s.unit_price) item.unit_price = s.unit_price;
-                renderItems();
+                $('#item-modal-name').value = s.name;
+                autoGrow($('#item-modal-name'));
                 scheduleSave();
                 hideSuggest();
             });
@@ -356,8 +674,8 @@
     }
 
     function hideSuggest() {
-        $('#suggest-box').hidden = true;
-        suggestTarget = null;
+        const b = $('#item-modal-suggest');
+        if (b) { b.hidden = true; b.innerHTML = ''; }
     }
 
     // ================= Texto libre → IA =================
@@ -377,34 +695,82 @@
         btn.disabled = true;
         btn.textContent = 'Procesando…';
         try {
-            const { items: parsed } = await API.aiParse(text);
-            if (!parsed.length) {
-                toast('La IA no encontró items en el texto', true);
+            const { ops, summary } = await API.aiCommand(text, items);
+            if (!ops.length) {
+                toast(summary || 'La IA no encontró cambios para hacer', true);
             } else {
                 $('#ai-text').value = '';
                 hideAIPanel();
-                showDraft(parsed);
+                showOps(ops, summary);
             }
         } catch (err) {
             toast(err.message, true);
         } finally {
             btn.disabled = false;
-            btn.textContent = 'Convertir en items';
+            btn.textContent = 'Aplicar con IA';
         }
     });
 
-    // ================= Borrador de items IA =================
-    function showDraft(parsed) {
-        draftItems = parsed;
+    // ================= Borrador de cambios IA (agregar / editar / borrar) =================
+    // Envoltorio para que el flujo de importar archivos (que solo agrega items nuevos)
+    // reuse el mismo panel de confirmación que los comandos de la IA.
+    function itemsToAddOps(parsedItems) {
+        return parsedItems.map(item => ({ action: 'add', item }));
+    }
+
+    function describeOp(op) {
+        if (op.action === 'add') {
+            const d = op.item;
+            return {
+                tag: '+ Nuevo', tagClass: 'draft-op-add',
+                title: d.name,
+                detail: `${formatQty(d.quantity)} ${d.unit} × ${formatARS(d.unit_price)}`,
+            };
+        }
+        const cur = items[op.num - 1];
+        if (op.action === 'update') {
+            const f = op.fields;
+            const changes = [];
+            if (f.quantity !== undefined || f.unit !== undefined) {
+                changes.push(`${formatQty(cur?.quantity)} ${cur?.unit} → ${formatQty(f.quantity ?? cur?.quantity)} ${f.unit ?? cur?.unit}`);
+            }
+            if (f.unit_price !== undefined) changes.push(`${formatARS(cur?.unit_price)} → ${formatARS(f.unit_price)}`);
+            if (f.name !== undefined) changes.push(`nombre → "${f.name}"`);
+            if (f.detail !== undefined) changes.push('detalle actualizado');
+            return {
+                tag: `✎ Item ${op.num}`, tagClass: 'draft-op-update',
+                title: cur ? cur.name : `Item ${op.num}`,
+                detail: changes.join(' · '),
+            };
+        }
+        // remove
+        return {
+            tag: `✕ Borrar item ${op.num}`, tagClass: 'draft-op-remove',
+            title: cur ? cur.name : `Item ${op.num}`,
+            detail: '',
+        };
+    }
+
+    function showOps(ops, summary) {
+        draftOps = ops;
         const listEl = $('#draft-list');
         listEl.innerHTML = '';
-        for (const d of parsed) {
+        if (summary) {
+            const s = document.createElement('p');
+            s.className = 'draft-summary';
+            s.textContent = summary;
+            listEl.appendChild(s);
+        }
+        for (const op of ops) {
+            const d = describeOp(op);
             const row = document.createElement('div');
             row.className = 'draft-item';
-            row.innerHTML = `<div class="draft-item-main"><span></span><small class="draft-item-spec"></small></div><span class="draft-item-detail"></span>`;
-            row.querySelector('.draft-item-main span').textContent = d.name;
-            row.querySelector('.draft-item-spec').textContent = (d.detail || '').split('\n').filter(Boolean).join(' · ');
-            row.lastChild.textContent = `${d.quantity} ${d.unit} × ${formatARS(d.unit_price)}`;
+            row.innerHTML = `
+                <div class="draft-item-main">
+                    <span class="draft-op-tag ${d.tagClass}">${d.tag}</span>
+                    <span>${d.title}</span>
+                </div>
+                <span class="draft-item-detail">${d.detail}</span>`;
             listEl.appendChild(row);
         }
         $('#draft-panel').hidden = false;
@@ -412,16 +778,99 @@
 
     function hideDraft() {
         $('#draft-panel').hidden = true;
-        draftItems = [];
+        draftOps = [];
     }
 
     $('#btn-draft-cancel').addEventListener('click', hideDraft);
     $('#btn-draft-add').addEventListener('click', () => {
-        items.push(...draftItems);
+        // Orden importante para no romper la numeración: primero editar (índices intactos),
+        // después borrar (de mayor a menor num, así no se corren los índices todavía por procesar),
+        // recién al final agregar los nuevos.
+        draftOps.filter(o => o.action === 'update').forEach(op => {
+            const idx = op.num - 1;
+            if (items[idx]) Object.assign(items[idx], op.fields);
+        });
+        draftOps.filter(o => o.action === 'remove').map(o => o.num).sort((a, b) => b - a).forEach(num => {
+            items.splice(num - 1, 1);
+        });
+        draftOps.filter(o => o.action === 'add').forEach(op => items.push(op.item));
         hideDraft();
         renderItems();
         scheduleSave();
-        toast('Items agregados');
+        toast('Cambios aplicados');
+    });
+
+    // ================= Ortografía (corrección con IA) =================
+    $('#btn-spell').addEventListener('click', async () => {
+        const valid = items.filter(i => (i.name && i.name.trim()) || (i.detail && i.detail.trim()));
+        if (!valid.length) {
+            toast('No hay items para corregir', true);
+            return;
+        }
+        const btn = $('#btn-spell');
+        const label = $('#spell-label');
+        btn.disabled = true;
+        const prevLabel = label.textContent;
+        label.textContent = 'Corrigiendo…';
+        try {
+            // Aplanamos: por cada item van [name, detail] en orden.
+            const flat = [];
+            items.forEach(i => { flat.push(i.name || '', i.detail || ''); });
+            const { texts } = await API.aiSpellcheck(flat);
+            let changed = 0;
+            items.forEach((it, idx) => {
+                const newName = texts[idx * 2];
+                const newDetail = texts[idx * 2 + 1];
+                if (typeof newName === 'string' && newName !== it.name) { it.name = newName; changed++; }
+                if (typeof newDetail === 'string' && newDetail !== it.detail) { it.detail = newDetail; changed++; }
+            });
+            renderItems();
+            if (changed) {
+                scheduleSave();
+                toast('Ortografía corregida');
+            } else {
+                toast('No había nada que corregir');
+            }
+        } catch (err) {
+            toast(err.message, true);
+        } finally {
+            btn.disabled = false;
+            label.textContent = prevLabel;
+        }
+    });
+
+    // ================= Importar archivo (PDF / Excel / CSV) =================
+    $('#btn-import').addEventListener('click', () => $('#import-file').click());
+    $('#import-file').addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        e.target.value = '';   // permite re-subir el mismo archivo
+        if (!file) return;
+        const ext = (file.name.split('.').pop() || '').toLowerCase();
+        if (!['pdf', 'xlsx', 'csv'].includes(ext)) {
+            toast('Subí un PDF, Excel (.xlsx) o CSV', true);
+            return;
+        }
+        const btn = $('#btn-import');
+        const lbl = $('#import-label');
+        const prev = lbl.textContent;
+        btn.disabled = true;
+        lbl.textContent = 'Leyendo…';
+        hideAIPanel();
+        hideDraft();
+        try {
+            const { items: parsed } = await API.importFile(file, ext);
+            if (!parsed.length) {
+                toast('No encontré items en ese archivo', true);
+            } else {
+                showOps(itemsToAddOps(parsed), '');
+                toast(`${parsed.length} item${parsed.length === 1 ? '' : 's'} detectado${parsed.length === 1 ? '' : 's'}`);
+            }
+        } catch (err) {
+            toast(err.message, true);
+        } finally {
+            btn.disabled = false;
+            lbl.textContent = prev;
+        }
     });
 
     // ================= Voz =================
@@ -450,7 +899,7 @@
             async onStop(blob) {
                 voiceBtn.classList.remove('recording');
                 if (blob.size < 1500) {
-                    voiceLabel.textContent = 'Dictar items';
+                    voiceLabel.textContent = 'Dictar';
                     toast('La grabación quedó muy corta', true);
                     return;
                 }
@@ -458,18 +907,18 @@
                 try {
                     const { text } = await API.aiTranscribe(blob);
                     voiceLabel.textContent = 'Armando items…';
-                    const { items: parsed } = await API.aiParse(text);
-                    if (!parsed.length) toast(`Se escuchó "${text.slice(0, 60)}" pero no se encontraron items`, true);
-                    else showDraft(parsed);
+                    const { ops, summary } = await API.aiCommand(text, items);
+                    if (!ops.length) toast(summary || `Se escuchó "${text.slice(0, 60)}" pero no se encontraron cambios`, true);
+                    else showOps(ops, summary);
                 } catch (err) {
                     toast(err.message, true);
                 } finally {
-                    voiceLabel.textContent = 'Dictar items';
+                    voiceLabel.textContent = 'Dictar';
                 }
             },
             onError(msg) {
                 voiceBtn.classList.remove('recording');
-                voiceLabel.textContent = 'Dictar items';
+                voiceLabel.textContent = 'Dictar';
                 toast(msg, true);
             },
         });
@@ -485,6 +934,12 @@
             location: $('#budget-location').value,
             advance_pct: Number($('#budget-advance').value) || 0,
             validity_days: Number($('#budget-validity').value) || 0,
+            format: currentBudget.format || 'original',
+            client_role: $('#budget-client-role').value,
+            client_address: $('#budget-client-address').value,
+            client_cp: $('#budget-client-cp').value,
+            client_phone: $('#budget-client-phone').value,
+            client_email: $('#budget-client-email').value,
         };
         const validItems = items.filter(i => i.name.trim());
         if (!validItems.length) {

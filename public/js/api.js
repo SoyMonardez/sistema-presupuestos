@@ -35,6 +35,7 @@ const API = {
     getPrices()        { return this.request('/api/prices'); },
     savePrices(prices) { return this.request('/api/prices', { method: 'PUT', body: JSON.stringify({ prices }) }); },
     aiParse(text)      { return this.request('/api/ai/parse', { method: 'POST', body: JSON.stringify({ text }) }); },
+    aiCommand(text, items) { return this.request('/api/ai/command', { method: 'POST', body: JSON.stringify({ text, items }) }); },
     async aiTranscribe(blob) {
         const res = await fetch('/api/ai/transcribe', {
             method: 'POST',
@@ -54,4 +55,24 @@ const API = {
         return data;
     },
     aiSuggest(query, items) { return this.request('/api/ai/suggest', { method: 'POST', body: JSON.stringify({ query, items }) }); },
+    aiSpellcheck(texts)     { return this.request('/api/ai/spellcheck', { method: 'POST', body: JSON.stringify({ texts }) }); },
+    aiClientData(name)      { return this.request('/api/ai/client-data', { method: 'POST', body: JSON.stringify({ name }) }); },
+    async importFile(file, ext) {
+        const res = await fetch('/api/import?ext=' + encodeURIComponent(ext), {
+            method: 'POST',
+            headers: {
+                'Content-Type': file.type || 'application/octet-stream',
+                'Authorization': `Bearer ${this.getToken()}`,
+            },
+            body: file,
+        });
+        if (res.status === 401) {
+            this.clearToken();
+            window.dispatchEvent(new Event('auth-expired'));
+            throw new Error('Sesión vencida');
+        }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+        return data;
+    },
 };
