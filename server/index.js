@@ -6,6 +6,7 @@ import { authMiddleware, issueToken, verifyPassword } from './auth.js';
 import budgetsRouter from './routes/budgets.js';
 import pricesRouter from './routes/prices.js';
 import aiRouter from './routes/ai.js';
+import importRouter from './routes/import.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3002;
@@ -46,6 +47,7 @@ app.post('/api/login', (req, res) => {
 app.use('/api/budgets', authMiddleware, budgetsRouter);
 app.use('/api/prices', authMiddleware, pricesRouter);
 app.use('/api/ai', authMiddleware, aiRouter);
+app.use('/api/import', authMiddleware, importRouter);
 
 // ---------- Frontend estático ----------
 app.use(express.static(path.join(__dirname, '..', 'public')));

@@ -85,84 +85,169 @@
     </header>
 
     <div class="editor-head">
-        <input type="text" id="budget-name" class="input-title" placeholder="Nombre de la obra">
-        <div class="editor-head-row">
-            <input type="text" id="budget-client" class="input-client" placeholder="Cliente">
-            <input type="text" id="budget-location" class="input-client" placeholder="Ubicación">
+        <input type="text" id="budget-name" class="input-title" placeholder="Nombre de la obra o trabajo">
+
+        <!-- Selector de formato del PDF -->
+        <div class="field-group">
+            <span class="field-group-label">¿Para quién es este presupuesto?</span>
+            <div class="format-switch" role="tablist">
+                <button type="button" class="format-btn active" data-format="original">Cliente común</button>
+                <button type="button" class="format-btn" data-format="municipal">Municipio</button>
+            </div>
+            <p class="field-hint" id="format-hint"></p>
         </div>
-        <div class="editor-head-row pdf-opts">
-            <label class="opt-field">
-                <span>Adelanto %</span>
-                <input type="number" id="budget-advance" inputmode="numeric" min="0" max="100" step="1">
-            </label>
-            <label class="opt-field">
-                <span>Validez (días)</span>
-                <input type="number" id="budget-validity" inputmode="numeric" min="0" step="1">
-            </label>
+
+        <!-- Datos del cliente -->
+        <div class="field-group">
+            <span class="field-group-label">Datos del cliente</span>
+            <input type="text" id="budget-client" class="input-field" placeholder="Nombre del cliente">
+            <input type="text" id="budget-location" class="input-field orig-only" placeholder="Ubicación de la obra">
+
+            <!-- Campos extra (solo formato municipio) -->
+            <div id="municipal-fields" hidden>
+                <button id="btn-client-ai" class="btn-client-ai" type="button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3L12 3z"/></svg>
+                    <span>Completar datos automáticamente</span>
+                </button>
+                <input type="text" id="budget-client-role" class="input-field" placeholder="Intendente / A cargo">
+                <input type="text" id="budget-client-address" class="input-field" placeholder="Dirección del cliente">
+                <div class="two-col">
+                    <input type="text" id="budget-client-cp" class="input-field" placeholder="Código Postal">
+                    <input type="text" id="budget-client-phone" class="input-field" placeholder="Teléfono">
+                </div>
+                <input type="text" id="budget-client-email" class="input-field" placeholder="Email del cliente">
+            </div>
+        </div>
+
+        <!-- Condiciones (solo formato cliente) -->
+        <div class="field-group orig-only" id="advance-opts">
+            <span class="field-group-label">Condiciones de pago</span>
+            <div class="two-col">
+                <label class="opt-field">
+                    <span>Adelanto %</span>
+                    <input type="number" id="budget-advance" inputmode="numeric" min="0" max="100" step="1">
+                </label>
+                <label class="opt-field">
+                    <span>Validez (días)</span>
+                    <input type="number" id="budget-validity" inputmode="numeric" min="0" step="1">
+                </label>
+            </div>
         </div>
     </div>
 
     <!-- Dictado / IA -->
     <div class="ai-bar">
-        <button id="btn-voice" class="btn btn-voice">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-            <span id="voice-label">Dictar items</span>
+        <button id="btn-voice" class="tool-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+            <span id="voice-label">Dictar</span>
         </button>
-        <button id="btn-ai-text" class="btn btn-secondary">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3L12 3z"/></svg>
-            Escribir y convertir
+        <button id="btn-ai-text" class="tool-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3L12 3z"/></svg>
+            <span>Escribir</span>
+        </button>
+        <button id="btn-import" class="tool-btn" title="Importar items desde un PDF o Excel">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <span id="import-label">Importar</span>
+        </button>
+        <button id="btn-spell" class="tool-btn" title="Corregir ortografía de los items">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/><polyline points="16 16 18 18 22 14"/></svg>
+            <span id="spell-label">Ortografía</span>
         </button>
     </div>
+    <input type="file" id="import-file" accept=".pdf,.xlsx,.csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" hidden>
 
     <!-- Panel de texto libre → IA -->
     <div id="ai-panel" class="ai-panel" hidden>
-        <textarea id="ai-text" rows="3" placeholder="Ej: 20 metros cuadrados de cerámica a 15 lucas el metro, 3 sacos de cemento a 12 mil y un día de mano de obra 80 mil"></textarea>
+        <textarea id="ai-text" rows="3" placeholder="Ej: 20 metros cuadrados de cerámica a 15 lucas el metro — o 'pasá el item 3 a metros cúbicos', 'sacá el item 5', 'el item 2 ahora sale 300 mil'"></textarea>
         <div class="ai-panel-actions">
             <button id="btn-ai-cancel" class="btn btn-ghost">Cancelar</button>
-            <button id="btn-ai-send" class="btn btn-primary">Convertir en items</button>
+            <button id="btn-ai-send" class="btn btn-primary">Aplicar con IA</button>
         </div>
     </div>
 
-    <!-- Borrador de items detectados por la IA -->
+    <!-- Borrador de cambios propuestos por la IA (agregar / editar / borrar items) -->
     <div id="draft-panel" class="draft-panel" hidden>
-        <p class="draft-title">La IA detectó estos items — revisalos antes de agregar:</p>
+        <p class="draft-title">La IA propone estos cambios — revisalos antes de aplicar:</p>
         <div id="draft-list"></div>
         <div class="ai-panel-actions">
             <button id="btn-draft-cancel" class="btn btn-ghost">Descartar</button>
-            <button id="btn-draft-add" class="btn btn-primary">Agregar todos</button>
+            <button id="btn-draft-add" class="btn btn-primary">Aplicar cambios</button>
         </div>
     </div>
 
-    <!-- Tabla de items -->
-    <div class="items-header">
-        <span class="col-name">Item</span>
-        <span class="col-qty">Cant.</span>
-        <span class="col-unit">Unidad</span>
-        <span class="col-price">Precio unit.</span>
-        <span class="col-x"></span>
-    </div>
+    <!-- Lista de items (tarjetas) -->
+    <h2 class="section-title">Items del presupuesto</h2>
     <div id="items-list" class="items-list"></div>
-    <button id="btn-add-item" class="btn btn-ghost btn-block">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" width="18" height="18"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    <button id="btn-add-item" class="btn-add">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" width="20" height="20"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         Agregar item
     </button>
-
-    <div id="suggest-box" class="suggest-box" hidden></div>
 
     <!-- Total + PDF -->
     <footer class="totalbar">
         <div class="total-info">
             <span class="total-label">TOTAL</span>
             <span id="total-amount" class="total-amount">$0</span>
+            <span id="total-words" class="total-words"></span>
         </div>
-        <button id="btn-pdf" class="btn btn-primary">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 18 15 15"/></svg>
-            PDF
+        <button id="btn-pdf" class="btn-pdf">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 18 15 15"/></svg>
+            <span>PDF</span>
         </button>
     </footer>
 </section>
 
 <div id="toast" class="toast" hidden></div>
+
+<!-- ============ MODAL: descripción del item ============ -->
+<div id="item-modal" class="modal-overlay" hidden>
+    <div class="modal-box">
+        <div class="modal-head">
+            <h3>Descripción del item</h3>
+            <button id="item-modal-close" class="modal-close" aria-label="Cerrar">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="22" height="22"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+        </div>
+        <div class="modal-body">
+            <label class="modal-label" for="item-modal-name">¿Qué trabajo o material?</label>
+            <textarea id="item-modal-name" class="modal-textarea" rows="3" placeholder="Ej: Plateas de hormigón H17 para bancos 1.10 x 2 m x 20 cm."></textarea>
+            <div id="item-modal-suggest" class="modal-suggest" hidden></div>
+            <label class="modal-label" for="item-modal-detail">Especificaciones <small>(opcional — una por línea, salen como viñetas en el PDF)</small></label>
+            <textarea id="item-modal-detail" class="modal-textarea" rows="4" placeholder="Medidas, materiales, aclaraciones…"></textarea>
+        </div>
+        <button id="item-modal-done" class="modal-done">Listo</button>
+    </div>
+</div>
+
+<!-- ============ MODAL: conversor de unidades ============ -->
+<div id="convert-modal" class="modal-overlay" hidden>
+    <div class="modal-box">
+        <div class="modal-head">
+            <h3>Convertir unidad</h3>
+            <button id="convert-modal-close" class="modal-close" aria-label="Cerrar">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="22" height="22"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+        </div>
+        <div class="modal-body">
+            <p class="field-hint">Cargá el precio total del trabajo y las medidas de la pieza — el sistema calcula solo la cantidad y el precio por metro lineal, m², m³ o unidad, sin cambiar el total.</p>
+
+            <label class="modal-label" for="conv-total">Precio total del trabajo</label>
+            <input type="text" id="conv-total" class="input-field" inputmode="numeric" placeholder="$ 0">
+
+            <label class="modal-label" for="conv-pieces">Cantidad de piezas</label>
+            <input type="text" id="conv-pieces" class="input-field" inputmode="decimal" placeholder="1">
+
+            <label class="modal-label">Medidas de 1 pieza (dejá en blanco lo que no aplique)</label>
+            <div class="two-col">
+                <label class="opt-field"><span>Largo (m)</span><input type="text" id="conv-largo" inputmode="decimal" placeholder="0"></label>
+                <label class="opt-field"><span>Ancho (m)</span><input type="text" id="conv-ancho" inputmode="decimal" placeholder="0"></label>
+                <label class="opt-field"><span>Alto / espesor (m)</span><input type="text" id="conv-alto" inputmode="decimal" placeholder="0"></label>
+            </div>
+
+            <div id="convert-results" class="convert-results"></div>
+        </div>
+    </div>
+</div>
 
 <script src="js/format.js"></script>
 <script src="js/api.js"></script>
