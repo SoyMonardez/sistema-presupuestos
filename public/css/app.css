@@ -1288,6 +1288,51 @@ body.modal-open { overflow: hidden; }
     white-space: nowrap;
 }
 
+/* La foto que mandó, dentro de su mensaje */
+.chat-photo {
+    max-width: 220px;
+    max-height: 260px;
+    width: auto;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    object-fit: cover;
+}
+
+/* Lo adjuntado, esperando a que lo mande */
+.chat-attach-preview {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 16px;
+    border-top: 1px solid var(--border);
+    background: var(--surface-2);
+}
+.chat-attach-preview img {
+    width: 44px; height: 44px;
+    border-radius: 9px;
+    object-fit: cover;
+    flex: 0 0 auto;
+}
+.chat-attach-info { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 auto; }
+#chat-attach-name {
+    font-size: 13.5px;
+    color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#chat-attach-hint { font-size: 11.5px; color: var(--text-dim); }
+.chat-attach-remove {
+    flex: 0 0 auto;
+    width: 36px; height: 36px;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+}
+.chat-attach-remove:hover { color: var(--danger, #d9534f); background: var(--surface); }
+
 /* Barra de escribir, fija abajo */
 .chat-bar {
     flex: 0 0 auto;
@@ -1327,6 +1372,20 @@ body.modal-open { overflow: hidden; }
     -webkit-tap-highlight-color: transparent;
 }
 .chat-send:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; }
+.chat-attach {
+    flex: 0 0 auto;
+    width: 44px; height: 44px;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+.chat-attach:hover { color: var(--primary); border-color: var(--primary); }
 
 /* ===================================================================
    Sugerencias de la IA — el arreglo del salto de pantalla

@@ -80,11 +80,13 @@ const API = {
      * de la respuesta a mano.
      * @returns el mismo objeto que sendChatMessage
      */
-    async streamChatMessage(chatId, text, itemNum, onDelta) {
+    async streamChatMessage(chatId, text, itemNum, onDelta, image) {
         const res = await fetch(`/api/chats/${chatId}/messages/stream`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.getToken()}` },
-            body: JSON.stringify({ text, item_num: itemNum || undefined }),
+            // La foto viaja en base64 dentro del JSON. Ya viene achicada del
+            // navegador (~150 kb), así que no hace falta multipart ni body crudo.
+            body: JSON.stringify({ text, item_num: itemNum || undefined, image: image || undefined }),
         });
         if (res.status === 401) {
             this.clearToken();

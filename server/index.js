@@ -54,7 +54,11 @@ app.use('/api/ai', authMiddleware, aiRouter);
 app.use('/api/import', authMiddleware, importRouter);
 // El chat cuelga de /api porque tiene rutas de los dos lados: las conversaciones
 // de un presupuesto (/api/budgets/:id/chats) y los mensajes (/api/chats/:id/...).
-app.use('/api', authMiddleware, chatRouter);
+//
+// Con su propio límite de body: los mensajes pueden traer una foto en base64. El
+// navegador ya la achica antes de mandarla (unos 150 kb), pero si no pudo —HEIC
+// fuera de iPhone— sube la original, y 512 kb no alcanzan.
+app.use('/api', authMiddleware, express.json({ limit: '12mb' }), chatRouter);
 
 // ---------- Frontend estático ----------
 app.use(express.static(path.join(__dirname, '..', 'public')));
