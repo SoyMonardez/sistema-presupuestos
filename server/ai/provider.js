@@ -100,6 +100,33 @@ export async function complete({ task, system, messages, schema, expectJson, max
     });
 }
 
+/**
+ * Igual que complete(), pero llamando a `onDelta(fragmento)` con el texto a
+ * medida que lo escribe el modelo. Si el proveedor que le toca a la tarea no
+ * soporta streaming, cae a la versión de siempre: el que llama recibe el
+ * resultado igual, solo que de una sola vez.
+ */
+export async function completeStream({ task, system, messages, schema, expectJson, maxTokens, temperature, effort }, onDelta) {
+    const provider = resolveProvider(task);
+    const defaults = TASK_DEFAULTS[task] || {};
+
+    const opts = {
+        system,
+        messages,
+        schema,
+        expectJson,
+        hasImages: messages.some(m => Array.isArray(m.content) && m.content.some(p => p.type === 'image')),
+        maxTokens:   maxTokens   ?? defaults.maxTokens,
+        temperature: temperature ?? defaults.temperature,
+        effort:      effort      ?? defaults.effort,
+    };
+
+    if (provider.supportsStream && provider.completeStream) {
+        return provider.completeStream(opts, onDelta);
+    }
+    return provider.complete(opts);
+}
+
 /** Qué proveedor atiende cada tarea. Solo para diagnóstico y logs de arranque. */
 export function routingSummary() {
     return Object.keys(DEFAULT_ROUTES).reduce((acc, task) => {

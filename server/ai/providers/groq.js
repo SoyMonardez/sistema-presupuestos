@@ -109,27 +109,103 @@ async function fetchConEspera(url, opciones, intentos = 2) {
     }
 }
 
+// El cuerpo del request es el mismo con y sin streaming; solo cambia el flag.
+function buildBody({ system, messages, schema, expectJson, maxTokens, temperature, hasImages, effort, stream = false }) {
+    const wantsJson = Boolean(schema) || expectJson;
+    return {
+        model: hasImages ? VISION_MODEL : MODEL,
+        messages: toGroqMessages(system, messages),
+        temperature,
+        max_tokens: maxTokens,
+        ...(stream ? { stream: true } : {}),
+        // El prompt describe la forma exacta del JSON; json_object alcanza y
+        // es lo que ya venía funcionando con todos los modelos de Groq.
+        ...(wantsJson ? {
+            response_format: { type: 'json_object' },
+            // Sin esto, un modelo que razona mete su <think> en el contenido y
+            // Groq rechaza el request entero por "failed to validate JSON",
+            // devolviendo failed_generation vacío (un rato largo de debug).
+            reasoning_format: 'hidden',
+            reasoning_effort: EFFORT_TO_GROQ[effort] || 'none',
+        } : {}),
+    };
+}
+
+export const supportsStream = true;
+
+/**
+ * Igual que complete(), pero avisando el texto a medida que llega.
+ *
+ * `onDelta(fragmento)` recibe los pedazos crudos del contenido. Como las tareas
+ * que streamean piden JSON, lo que va llegando es el JSON a medio escribir: el
+ * que llama decide qué mostrar de eso (ver extraerReplyParcial en el chat).
+ */
+export async function completeStream(opts, onDelta) {
+    const wantsJson = Boolean(opts.schema) || opts.expectJson;
+
+    // Acá NO se pide response_format: json_object, y es a propósito.
+    //
+    // Groq valida el JSON del lado del servidor antes de contestar, así que con
+    // el modo estricto la respuesta llega ENTERA en un solo fragmento: medido,
+    // 1 fragmento con json_object contra 131 sin él, y el primer texto en
+    // pantalla pasa de 724 ms a 426 ms. Con el modo estricto el streaming
+    // existe en el papel y no en la práctica.
+    //
+    // A cambio hay que parsear a mano lo que llega, que es justo lo que hace
+    // parseJsonFlexible. Si aun así sale mal, el que llama tiene la respuesta
+    // sin streaming como red (ver el catch en routes/chat.js).
+    const body = buildBody({ ...opts, stream: true });
+    delete body.response_format;
+
+    const res = await fetchConEspera(`${API}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+        const detail = await res.text();
+        throw new Error(`Groq ${res.status}: ${detail.slice(0, 400)}`);
+    }
+
+    let completo = '';
+    let buffer = '';
+    const decoder = new TextDecoder();
+
+    for await (const chunk of res.body) {
+        buffer += decoder.decode(chunk, { stream: true });
+        // SSE: eventos separados por línea en blanco, cada uno con "data: {...}".
+        const eventos = buffer.split('\n');
+        buffer = eventos.pop() || '';   // la última puede estar cortada al medio
+
+        for (const linea of eventos) {
+            const dato = linea.trim();
+            if (!dato.startsWith('data:')) continue;
+            const payload = dato.slice(5).trim();
+            if (!payload || payload === '[DONE]') continue;
+            try {
+                const json = JSON.parse(payload);
+                const trozo = json.choices?.[0]?.delta?.content;
+                if (trozo) {
+                    completo += trozo;
+                    onDelta?.(trozo);
+                }
+            } catch {
+                // Un evento suelto malformado no justifica tirar toda la respuesta.
+            }
+        }
+    }
+
+    if (!completo) throw new Error('Respuesta vacía de Groq');
+    return wantsJson ? parseJsonFlexible(completo) : { text: completo };
+}
+
 export async function complete({ system, messages, schema, expectJson = false, maxTokens = 2000, temperature = 0.2, hasImages = false, effort = 'medium' }) {
     const wantsJson = Boolean(schema) || expectJson;
     const res = await fetchConEspera(`${API}/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({
-            model: hasImages ? VISION_MODEL : MODEL,
-            messages: toGroqMessages(system, messages),
-            temperature,
-            max_tokens: maxTokens,
-            // El prompt describe la forma exacta del JSON; json_object alcanza y
-            // es lo que ya venía funcionando con todos los modelos de Groq.
-            ...(wantsJson ? {
-                response_format: { type: 'json_object' },
-                // Sin esto, un modelo que razona mete su <think> en el contenido y
-                // Groq rechaza el request entero por "failed to validate JSON",
-                // devolviendo failed_generation vacío (un rato largo de debug).
-                reasoning_format: 'hidden',
-                reasoning_effort: EFFORT_TO_GROQ[effort] || 'none',
-            } : {}),
-        }),
+        body: JSON.stringify(buildBody({ system, messages, schema, expectJson, maxTokens, temperature, hasImages, effort })),
     });
 
     if (!res.ok) {

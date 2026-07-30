@@ -16,9 +16,10 @@
 
 import { Router } from 'express';
 import db, { loadUnitCatalog } from '../db.js';
-import { complete, webSearch } from '../ai/provider.js';
+import { complete, completeStream, webSearch } from '../ai/provider.js';
 import { normalizeOps } from '../lib/ops.js';
 import { simulate, simulationToOps } from '../lib/simulate.js';
+import { partialString } from '../lib/partial-json.js';
 import { priceRefsPromptBlock } from './prices.js';
 import { unitsPromptBlock } from './units.js';
 
@@ -32,7 +33,9 @@ Devolvé SIEMPRE SOLO un JSON con esta forma:
 {"reply":"...","ops":[...],"simulate":{...},"web_query":"..."}
 
 - "reply": tu respuesta en español, para mostrarle. Es lo único que él lee, así que tiene que entenderse sola. Corta y al grano: 1 a 4 oraciones salvo que pida una explicación.
+  IMPORTANTE: poné "reply" SIEMPRE PRIMERO en el JSON. Se le va mostrando mientras lo escribís, así que si va al final lo deja esperando la pantalla en blanco.
 - "ops", "simulate" y "web_query" son opcionales: mandá solo el que corresponda, o ninguno si es pura charla.
+- "title": solo en tu PRIMERA respuesta de la conversación, 3 a 5 palabras que resuman de qué se trata ("Descuento del 10%", "Conversión a m³"). Sirve para que la reconozca después en la lista.
 
 CUÁNDO USAR CADA UNO
 
@@ -165,132 +168,233 @@ function safeParse(txt) {
 
 const MAX_HISTORIAL = 14;   // mensajes previos que se le mandan al modelo
 
+/**
+ * Todo el trabajo de responder un mensaje. Lo comparten el endpoint normal y el
+ * de streaming, para que no haya dos versiones de la misma lógica que se
+ * separen con el tiempo.
+ *
+ * `onDelta` es opcional: si viene, se le pasa el texto de la respuesta a medida
+ * que lo escribe el modelo.
+ */
+async function responder(chat, texto, itemNum, onDelta) {
+    const items = itemsStmt.all(chat.budget_id);
+    const catalog = loadUnitCatalog();
+
+    const previos = db.prepare(
+        'SELECT role, content FROM chat_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?'
+    ).all(chat.id, MAX_HISTORIAL).reverse();
+
+    const contexto = {
+        items_actuales: itemsParaPrompt(items),
+        total: Math.round(items.reduce((s, i) => s + i.quantity * i.unit_price, 0) * 100) / 100,
+        ...(itemNum ? { hablando_del_item: itemNum } : {}),
+    };
+
+    const system = CHAT_SYSTEM
+        + unitsPromptBlock()
+        + priceRefsPromptBlock()
+        + historicoPromptBlock(chat.budget_id, texto);
+
+    const mensajes = [
+        { role: 'user', content: `Presupuesto actual:\n${JSON.stringify(contexto).slice(0, 7000)}` },
+        ...previos.map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content })),
+    ];
+
+    // Lo que llega es el JSON a medio escribir; se le va sacando el campo "reply"
+    // para mostrarlo (ver server/lib/partial-json.js).
+    let crudo = '';
+    let mostrado = '';
+    const emitir = onDelta ? (trozo) => {
+        crudo += trozo;
+        const parcial = partialString(crudo, 'reply');
+        if (parcial.length > mostrado.length) {
+            onDelta(parcial.slice(mostrado.length));
+            mostrado = parcial;
+        }
+    } : null;
+
+    let rehizo = false;
+    let respuesta;
+    if (emitir) {
+        try {
+            respuesta = await completeStream({ task: 'chat', system, messages: mensajes, expectJson: true }, emitir);
+        } catch (err) {
+            // El streaming va sin modo JSON estricto para que sea streaming de
+            // verdad (ver providers/groq.js), así que de vez en cuando el modelo
+            // puede devolver algo que no parsea. Se rehace la consulta con el
+            // modo estricto en lugar de perderle el mensaje.
+            if (!/JSON/i.test(err.message)) throw err;
+            console.warn('[chat] el stream no devolvió JSON válido, reintento sin streaming');
+            respuesta = await complete({ task: 'chat', system, messages: mensajes, expectJson: true });
+            rehizo = true;   // lo que se mostró quedó viejo
+        }
+    } else {
+        respuesta = await complete({ task: 'chat', system, messages: mensajes, expectJson: true });
+    }
+
+    // Segunda pasada: pidió buscar precios en internet. Se hace la búsqueda y
+    // se le devuelve para que conteste con los datos a la vista.
+    let fuentes = [];
+    if (respuesta.web_query && !respuesta.ops?.length && !respuesta.simulate) {
+        try {
+            const hallazgo = await webSearch(String(respuesta.web_query).slice(0, 300));
+            fuentes = hallazgo.sources || [];
+            const seguimiento = [
+                ...mensajes,
+                { role: 'assistant', content: JSON.stringify({ reply: 'Buscando…' }) },
+                {
+                    role: 'user',
+                    content: `Resultados de la búsqueda "${respuesta.web_query}":\n${hallazgo.text}\n\nContestale con estos datos. Aclarale que son precios de internet, no de su tarifario, y que los revise. No devuelvas web_query de nuevo.`,
+                },
+            ];
+            // En la segunda pasada se vuelve a arrancar el texto desde cero: lo
+            // que se mostró de la primera era el "buscando", no la respuesta.
+            crudo = '';
+            mostrado = '';
+            rehizo = true;
+            respuesta = emitir
+                ? await completeStream({ task: 'chat', system, messages: seguimiento, expectJson: true }, emitir)
+                : await complete({ task: 'chat', system, messages: seguimiento, expectJson: true });
+        } catch (err) {
+            console.warn('[chat] búsqueda web falló:', err.message);
+            // Distinguir la cuota agotada de una falla cualquiera: si le decís
+            // "probá en un rato" cuando faltan 40 minutos de cuota, prueba tres
+            // veces y piensa que está roto.
+            const cuota = /\b429\b|rate_limit/i.test(err.message);
+            const minutos = err.message.match(/try again in (?:(\d+)m)?([\d.]+)s/i);
+            rehizo = true;
+            respuesta = {
+                reply: cuota
+                    ? `Me quedé sin cuota de búsqueda en internet por hoy${minutos?.[1] ? ` (se libera en ~${minutos[1]} min)` : ''}. Lo que sí puedo: mirar tu tarifario y lo que cobraste antes.`
+                    : 'No pude buscar el precio en internet ahora. Probá de nuevo en un rato.',
+            };
+        }
+    }
+
+    const adjunto = {};
+
+    // La simulación la calcula el servidor: la IA solo dijo qué simular.
+    if (respuesta.simulate) {
+        const sim = simulate(items, respuesta.simulate, catalog);
+        if (sim.ok) {
+            adjunto.simulation = { ...sim, items: undefined };  // los items completos no van al cliente
+            // Si acepta la simulación, se aplica por el mismo camino que todo
+            // lo demás: se guardan las ops equivalentes listas para confirmar.
+            adjunto.ops = simulationToOps(items, sim);
+        } else if (!sim.unknownType) {
+            // Pidió simular algo que no se puede (convertir horas a m³): se le
+            // dice. Si el modelo mandó un simulate que no venía al caso, se
+            // descarta callado en vez de mostrarle un error que no entiende.
+            adjunto.simulation = { ok: false, reason: sim.reason };
+        }
+    }
+
+    // Cambios pedidos directamente.
+    if (Array.isArray(respuesta.ops) && respuesta.ops.length) {
+        const { ops, warnings } = normalizeOps(respuesta.ops, items, catalog, 200);
+        adjunto.ops = ops;
+        if (warnings.length) adjunto.warnings = warnings;
+    }
+    if (fuentes.length) adjunto.sources = fuentes.slice(0, 4);
+
+    const reply = String(respuesta.reply || '').slice(0, 3000)
+        || 'No supe qué contestar a eso, ¿lo reformulás?';
+
+    const tieneAdjunto = Object.keys(adjunto).length > 0;
+    const info = db.prepare(
+        'INSERT INTO chat_messages (conversation_id, role, content, tool_json) VALUES (?, ?, ?, ?)'
+    ).run(chat.id, 'assistant', reply, tieneAdjunto ? JSON.stringify(adjunto) : '');
+
+    // El título lo pone el modelo en su primera respuesta ("Descuento del 10%").
+    // Si no lo mandó —pasa seguido, es un campo opcional en un prompt largo— se
+    // arma con lo que hizo, que describe la conversación mejor que la pregunta
+    // cruda. Recién como último recurso se usa el texto del usuario.
+    let titulo = chat.title;
+    if (!titulo) {
+        titulo = String(respuesta.title || '').trim().slice(0, 60)
+            || adjunto.simulation?.label
+            || texto.slice(0, 60);
+        db.prepare('UPDATE chat_conversations SET title = ? WHERE id = ?').run(titulo, chat.id);
+    }
+    db.prepare(`UPDATE chat_conversations SET updated_at = datetime('now') WHERE id = ?`).run(chat.id);
+
+    return {
+        message: { id: info.lastInsertRowid, role: 'assistant', content: reply, data: tieneAdjunto ? adjunto : null },
+        title: titulo,
+        // Avisa que el texto que se streameó quedó viejo y hay que reemplazarlo.
+        replaced: rehizo,
+    };
+}
+
+function mensajeDeError(err) {
+    const limite = /\b429\b|rate_limit/i.test(err.message);
+    return limite
+        ? 'Se alcanzó el límite diario de IA. Probá de nuevo más tarde.'
+        : 'El asistente no pudo responder. Probá de nuevo.';
+}
+
+function leerPedido(req) {
+    const texto = String(req.body?.text || '').trim();
+    if (!texto) return { error: 'Falta el mensaje' };
+    if (texto.length > 2000) return { error: 'Mensaje demasiado largo' };
+    // El item señalado desde el atajo ("estoy hablando del item 3").
+    return { texto, itemNum: Number(req.body?.item_num) || null };
+}
+
 router.post('/chats/:id/messages', async (req, res) => {
     const chat = db.prepare('SELECT * FROM chat_conversations WHERE id = ?').get(req.params.id);
     if (!chat) return res.status(404).json({ error: 'No existe la conversación' });
 
-    const texto = String(req.body?.text || '').trim();
-    if (!texto) return res.status(400).json({ error: 'Falta el mensaje' });
-    if (texto.length > 2000) return res.status(400).json({ error: 'Mensaje demasiado largo' });
-
-    // El item señalado desde el atajo ("estoy hablando del item 3").
-    const itemNum = Number(req.body?.item_num) || null;
-
-    const items = itemsStmt.all(chat.budget_id);
-    const catalog = loadUnitCatalog();
+    const pedido = leerPedido(req);
+    if (pedido.error) return res.status(400).json({ error: pedido.error });
 
     db.prepare('INSERT INTO chat_messages (conversation_id, role, content) VALUES (?, ?, ?)')
-        .run(chat.id, 'user', texto);
+        .run(chat.id, 'user', pedido.texto);
 
     try {
-        const previos = db.prepare(
-            'SELECT role, content FROM chat_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?'
-        ).all(chat.id, MAX_HISTORIAL).reverse();
-
-        const contexto = {
-            items_actuales: itemsParaPrompt(items),
-            total: Math.round(items.reduce((s, i) => s + i.quantity * i.unit_price, 0) * 100) / 100,
-            ...(itemNum ? { hablando_del_item: itemNum } : {}),
-        };
-
-        const system = CHAT_SYSTEM
-            + unitsPromptBlock()
-            + priceRefsPromptBlock()
-            + historicoPromptBlock(chat.budget_id, texto);
-
-        const mensajes = [
-            { role: 'user', content: `Presupuesto actual:\n${JSON.stringify(contexto).slice(0, 7000)}` },
-            ...previos.map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content })),
-        ];
-
-        let respuesta = await complete({ task: 'chat', system, messages: mensajes, expectJson: true });
-
-        // Segunda pasada: pidió buscar precios en internet. Se hace la búsqueda y
-        // se le devuelve para que conteste con los datos a la vista.
-        let fuentes = [];
-        if (respuesta.web_query && !respuesta.ops?.length && !respuesta.simulate) {
-            try {
-                const hallazgo = await webSearch(String(respuesta.web_query).slice(0, 300));
-                fuentes = hallazgo.sources || [];
-                respuesta = await complete({
-                    task: 'chat',
-                    system,
-                    messages: [
-                        ...mensajes,
-                        { role: 'assistant', content: JSON.stringify({ reply: 'Buscando…' }) },
-                        {
-                            role: 'user',
-                            content: `Resultados de la búsqueda "${respuesta.web_query}":\n${hallazgo.text}\n\nContestale con estos datos. Aclarale que son precios de internet, no de su tarifario, y que los revise. No devuelvas web_query de nuevo.`,
-                        },
-                    ],
-                    expectJson: true,
-                });
-            } catch (err) {
-                console.warn('[chat] búsqueda web falló:', err.message);
-                // Distinguir la cuota agotada de una falla cualquiera: si le decís
-                // "probá en un rato" cuando faltan 40 minutos de cuota, prueba tres
-                // veces y piensa que está roto.
-                const cuota = /\b429\b|rate_limit/i.test(err.message);
-                const minutos = err.message.match(/try again in (?:(\d+)m)?([\d.]+)s/i);
-                respuesta = {
-                    reply: cuota
-                        ? `Me quedé sin cuota de búsqueda en internet por hoy${minutos?.[1] ? ` (se libera en ~${minutos[1]} min)` : ''}. Lo que sí puedo: mirar tu tarifario y lo que cobraste antes.`
-                        : 'No pude buscar el precio en internet ahora. Probá de nuevo en un rato.',
-                };
-            }
-        }
-
-        const adjunto = {};
-
-        // La simulación la calcula el servidor: la IA solo dijo qué simular.
-        if (respuesta.simulate) {
-            const sim = simulate(items, respuesta.simulate, catalog);
-            if (sim.ok) {
-                adjunto.simulation = { ...sim, items: undefined };  // los items completos no van al cliente
-                // Si acepta la simulación, se aplica por el mismo camino que todo
-                // lo demás: se guardan las ops equivalentes listas para confirmar.
-                adjunto.ops = simulationToOps(items, sim);
-            } else if (!sim.unknownType) {
-                // Pidió simular algo que no se puede (convertir horas a m³): se le
-                // dice. Si el modelo mandó un simulate que no venía al caso, se
-                // descarta callado en vez de mostrarle un error que no entiende.
-                adjunto.simulation = { ok: false, reason: sim.reason };
-            }
-        }
-
-        // Cambios pedidos directamente.
-        if (Array.isArray(respuesta.ops) && respuesta.ops.length) {
-            const { ops, warnings } = normalizeOps(respuesta.ops, items, catalog, 200);
-            adjunto.ops = ops;
-            if (warnings.length) adjunto.warnings = warnings;
-        }
-        if (fuentes.length) adjunto.sources = fuentes.slice(0, 4);
-
-        const reply = String(respuesta.reply || '').slice(0, 3000)
-            || 'No supe qué contestar a eso, ¿lo reformulás?';
-
-        const tieneAdjunto = Object.keys(adjunto).length > 0;
-        const info = db.prepare(
-            'INSERT INTO chat_messages (conversation_id, role, content, tool_json) VALUES (?, ?, ?, ?)'
-        ).run(chat.id, 'assistant', reply, tieneAdjunto ? JSON.stringify(adjunto) : '');
-
-        // El título de la conversación sale del primer mensaje, para reconocerla
-        // después en la lista.
-        if (!chat.title) {
-            db.prepare('UPDATE chat_conversations SET title = ? WHERE id = ?')
-                .run(texto.slice(0, 60), chat.id);
-        }
-        db.prepare(`UPDATE chat_conversations SET updated_at = datetime('now') WHERE id = ?`).run(chat.id);
-
-        res.json({
-            message: { id: info.lastInsertRowid, role: 'assistant', content: reply, data: tieneAdjunto ? adjunto : null },
-        });
+        const out = await responder(chat, pedido.texto, pedido.itemNum);
+        res.json(out);
     } catch (err) {
         console.error('[chat]', err.message);
-        const limite = /\b429\b|rate_limit/i.test(err.message);
-        res.status(502).json({ error: limite
-            ? 'Se alcanzó el límite diario de IA. Probá de nuevo más tarde.'
-            : 'El asistente no pudo responder. Probá de nuevo.' });
+        res.status(502).json({ error: mensajeDeError(err) });
+    }
+});
+
+/**
+ * Igual que el anterior pero por SSE, para que el texto aparezca mientras se
+ * escribe en vez de después de varios segundos de pantalla quieta.
+ *
+ * Eventos: "delta" (un pedazo de texto) · "done" (el mensaje completo con su
+ * simulación y sus ops) · "error".
+ */
+router.post('/chats/:id/messages/stream', async (req, res) => {
+    const chat = db.prepare('SELECT * FROM chat_conversations WHERE id = ?').get(req.params.id);
+    if (!chat) return res.status(404).json({ error: 'No existe la conversación' });
+
+    const pedido = leerPedido(req);
+    if (pedido.error) return res.status(400).json({ error: pedido.error });
+
+    db.prepare('INSERT INTO chat_messages (conversation_id, role, content) VALUES (?, ?, ?)')
+        .run(chat.id, 'user', pedido.texto);
+
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+        // Sin esto, un proxy que buffea (nginx por defecto) se guarda todo y lo
+        // suelta junto al final: el streaming deja de existir sin dar la cara.
+        'X-Accel-Buffering': 'no',
+    });
+    const enviar = (evento, dato) => res.write(`event: ${evento}\ndata: ${JSON.stringify(dato)}\n\n`);
+
+    try {
+        const out = await responder(chat, pedido.texto, pedido.itemNum, (trozo) => enviar('delta', { text: trozo }));
+        enviar('done', out);
+    } catch (err) {
+        console.error('[chat/stream]', err.message);
+        enviar('error', { error: mensajeDeError(err) });
+    } finally {
+        res.end();
     }
 });
 
