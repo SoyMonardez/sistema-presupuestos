@@ -42,7 +42,49 @@ function toGroqMessages(system, messages) {
     return out;
 }
 
-export async function complete({ system, messages, schema, expectJson = false, maxTokens = 2000, temperature = 0.2, hasImages = false }) {
+/**
+ * Rescata el JSON de una respuesta que vino con adornos.
+ *
+ * Los modelos que razonan (qwen3, deepseek) escriben su cadena de pensamiento en
+ * un bloque <think>…</think> y después encierran la respuesta en un cerco de
+ * ```json. Eso rompe cualquier JSON.parse directo. Se pide reasoning_format
+ * 'hidden' para que no pase, pero esto queda como red por si el próximo modelo
+ * se comporta distinto: es barato y evita perder una lectura entera por un cerco.
+ */
+function parseJsonFlexible(raw) {
+    let texto = String(raw).trim();
+    texto = texto.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+
+    const cerco = texto.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (cerco) texto = cerco[1].trim();
+
+    try {
+        return JSON.parse(texto);
+    } catch {
+        // Último intento: quedarse con el objeto más externo que aparezca.
+        const desde = texto.indexOf('{');
+        const hasta = texto.lastIndexOf('}');
+        if (desde >= 0 && hasta > desde) return JSON.parse(texto.slice(desde, hasta + 1));
+        throw new Error('La IA no devolvió un JSON válido');
+    }
+}
+
+// Cuánto puede "pensar" el modelo antes de contestar.
+//
+// Esto importa más de lo que parece: los modelos que razonan gastan del MISMO
+// presupuesto de completion para pensar y para responder. Con un prompt largo
+// (el de leer una hoja de cambios lo es) qwen3 se comió los 4000 tokens enteros
+// razonando y devolvió contenido vacío, que Groq reporta como
+// "failed to validate JSON" con failed_generation vacío — un error que no dice
+// nada de lo que realmente pasó.
+//
+// Para las tareas que devuelven JSON se apaga el razonamiento: los prompts ya
+// describen la forma exacta de la respuesta, y lo que devuelve se valida después
+// contra normalizeOp igual. Preferimos una respuesta que llega a una respuesta
+// "mejor pensada" que se corta por la mitad.
+const EFFORT_TO_GROQ = { low: 'none', medium: 'none', high: 'low' };
+
+export async function complete({ system, messages, schema, expectJson = false, maxTokens = 2000, temperature = 0.2, hasImages = false, effort = 'medium' }) {
     const wantsJson = Boolean(schema) || expectJson;
     const res = await fetch(`${API}/chat/completions`, {
         method: 'POST',
@@ -54,7 +96,14 @@ export async function complete({ system, messages, schema, expectJson = false, m
             max_tokens: maxTokens,
             // El prompt describe la forma exacta del JSON; json_object alcanza y
             // es lo que ya venía funcionando con todos los modelos de Groq.
-            ...(wantsJson ? { response_format: { type: 'json_object' } } : {}),
+            ...(wantsJson ? {
+                response_format: { type: 'json_object' },
+                // Sin esto, un modelo que razona mete su <think> en el contenido y
+                // Groq rechaza el request entero por "failed to validate JSON",
+                // devolviendo failed_generation vacío (un rato largo de debug).
+                reasoning_format: 'hidden',
+                reasoning_effort: EFFORT_TO_GROQ[effort] || 'none',
+            } : {}),
         }),
     });
 
@@ -67,7 +116,7 @@ export async function complete({ system, messages, schema, expectJson = false, m
     const content = data.choices?.[0]?.message?.content;
     if (!content) throw new Error('Respuesta vacía de Groq');
 
-    return wantsJson ? JSON.parse(content) : { text: content };
+    return wantsJson ? parseJsonFlexible(content) : { text: content };
 }
 
 /**

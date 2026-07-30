@@ -63,6 +63,34 @@ const API = {
     aiSuggest(query, items) { return this.request('/api/ai/suggest', { method: 'POST', body: JSON.stringify({ query, items }) }); },
     aiSpellcheck(texts)     { return this.request('/api/ai/spellcheck', { method: 'POST', body: JSON.stringify({ texts }) }); },
     aiClientData(name)      { return this.request('/api/ai/client-data', { method: 'POST', body: JSON.stringify({ name }) }); },
+    // ---- Visión: fotos ----
+    // Mismo patrón que importFile y el audio: el archivo va como body crudo.
+    async _postImage(file, ext, query) {
+        const res = await fetch(`/api/ai/vision?ext=${encodeURIComponent(ext)}&${query}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': file.type || 'application/octet-stream',
+                'Authorization': `Bearer ${this.getToken()}`,
+            },
+            body: file,
+        });
+        if (res.status === 401) {
+            this.clearToken();
+            window.dispatchEvent(new Event('auth-expired'));
+            throw new Error('Sesión vencida');
+        }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+        return data;
+    },
+    // La hoja que devuelve el municipio: se compara contra el presupuesto guardado.
+    readChangeSheet(file, ext, budgetId) {
+        return this._postImage(file, ext, `mode=changes&budget=${budgetId}`);
+    },
+    // Una foto de una lista de trabajos → items nuevos.
+    readPhotoItems(file, ext) {
+        return this._postImage(file, ext, 'mode=import');
+    },
     async importFile(file, ext) {
         const res = await fetch('/api/import?ext=' + encodeURIComponent(ext), {
             method: 'POST',

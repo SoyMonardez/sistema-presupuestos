@@ -123,7 +123,7 @@
             <span id="spell-label">Ortografía</span>
         </button>
     </div>
-    <input type="file" id="import-file" accept=".pdf,.xlsx,.csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" hidden>
+    <input type="file" id="import-file" accept=".pdf,.xlsx,.csv,image/*" hidden>
 
     <!-- Panel de texto libre → IA -->
     <div id="ai-panel" class="ai-panel" hidden>
@@ -254,7 +254,8 @@
 
 <!-- ============ MODAL: descripción del item ============ -->
 <div id="item-modal" class="modal-overlay" hidden>
-    <div class="modal-box">
+    <div class="modal-box modal-tall">
+        <div class="sheet-grip" aria-hidden="true"></div>
         <div class="modal-head">
             <h3>Descripción del item</h3>
             <button id="item-modal-close" class="modal-close" aria-label="Cerrar">
@@ -276,11 +277,37 @@
     </div>
 </div>
 
+<!-- ============ MODAL: qué es lo que se sube ============ -->
+<!-- Con items ya cargados, una foto puede ser una lista para importar o la hoja
+     de cambios que devolvió el municipio. Son cosas muy distintas: se pregunta. -->
+<div id="import-choice" class="modal-overlay" hidden>
+    <div class="modal-box">
+        <div class="sheet-grip" aria-hidden="true"></div>
+        <div class="modal-head">
+            <h3>¿Qué vas a subir?</h3>
+            <button id="import-choice-close" class="modal-close" aria-label="Cerrar">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="22" height="22"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+        </div>
+        <div class="modal-body">
+            <button id="choice-changes" type="button" class="choice-card">
+                <span class="choice-card-title">La hoja de cambios que me dieron</span>
+                <span class="choice-card-desc">Una foto de la propuesta del municipio o del cliente. La comparo con este presupuesto y te muestro qué piden cambiar — incluida la conversión de unidades, con la medida que traiga la hoja.</span>
+            </button>
+            <button id="choice-import" type="button" class="choice-card">
+                <span class="choice-card-title">Una lista de trabajos para agregar</span>
+                <span class="choice-card-desc">Foto, PDF, Excel o CSV con items para sumar a este presupuesto.</span>
+            </button>
+        </div>
+    </div>
+</div>
+
 <!-- ============ MODAL: selector de unidad ============ -->
 <!-- Reemplaza al campo de texto libre: sin teclado no hay "m2" ni "metros
      cuadrados" conviviendo con "m²", que es lo que rompía las conversiones. -->
 <div id="unit-modal" class="modal-overlay" hidden>
     <div class="modal-box">
+        <div class="sheet-grip" aria-hidden="true"></div>
         <div class="modal-head">
             <h3>Unidad de medida</h3>
             <button id="unit-modal-close" class="modal-close" aria-label="Cerrar">
@@ -297,6 +324,7 @@
 <!-- ============ MODAL: conversor de unidades ============ -->
 <div id="convert-modal" class="modal-overlay" hidden>
     <div class="modal-box">
+        <div class="sheet-grip" aria-hidden="true"></div>
         <div class="modal-head">
             <h3 id="convert-modal-title">Convertir unidad</h3>
             <button id="convert-modal-close" class="modal-close" aria-label="Cerrar">

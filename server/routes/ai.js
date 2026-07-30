@@ -4,7 +4,8 @@ import { complete, transcribeAudio } from '../ai/provider.js';
 import { ITEMS_SCHEMA, TEXTS_SCHEMA, SUGGESTIONS_SCHEMA, CLIENT_SCHEMA } from '../ai/schemas.js';
 import { normalizeOps } from '../lib/ops.js';
 import { canonicalLabel } from '../lib/units.js';
-import { loadUnitCatalog } from '../db.js';
+import { prepareForVision } from '../lib/images.js';
+import db, { loadUnitCatalog } from '../db.js';
 import { priceRefsPromptBlock } from './prices.js';
 import { unitsPromptBlock } from './units.js';
 
@@ -257,6 +258,195 @@ router.post('/command', async (req, res) => {
         res.status(502).json({ error: limite
             ? 'Se alcanzó el límite diario de IA. Probá de nuevo más tarde.'
             : 'La IA no pudo procesar el pedido. Probá de nuevo.' });
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Visión: la hoja de propuesta de cambios
+// ---------------------------------------------------------------------------
+// El flujo real que resuelve esto: él pasa el presupuesto en m², y el municipio
+// le devuelve una hoja con las mismas cosas pedidas en m³. Hasta ahora sacaba
+// esas cuentas a mano, item por item.
+//
+// La clave de diseño: la medida que falta para convertir (el espesor) VIENE EN
+// ESA HOJA. No hay que inventarla ni preguntarla — hay que leerla. Por eso leer
+// la foto y convertir no son dos funciones separadas: son la misma.
+//
+// Como siempre: el modelo solo lee y dice qué vio; la cuenta la hace units.js.
+
+const CHANGES_SYSTEM = `Sos un presupuestista argentino experto en leer hojas de propuesta de cambios que manda un municipio o un cliente sobre un presupuesto ya presentado.
+
+Te paso DOS cosas:
+1. Una imagen (foto o escaneo) de la hoja de cambios que le dieron.
+2. Los items del presupuesto actual, numerados 1, 2, 3... tal como los ve el usuario.
+
+Tu trabajo es COMPARAR la hoja contra el presupuesto y decir qué cambios pide.
+
+Devolvé SOLO un JSON con esta forma exacta: {"ops":[...],"summary":"...","sin_match":["..."]}
+
+- "summary": una oración en español contando qué pide la hoja, para mostrarle al usuario antes de que confirme.
+- "sin_match": lista de textos de la hoja que NO pudiste asociar a ningún item del presupuesto. Es importante que los reportes en vez de forzarlos: que aparezca acá no es un error, es información.
+
+Cada elemento de "ops" es uno de estos:
+
+1) CONVERTIR LA UNIDAD de un item (el caso más común en estas hojas):
+   {"action":"convert","num":N,"target_unit":"m³","alto":0.15}
+   - "num": el número del item DEL PRESUPUESTO ACTUAL que corresponde a esa línea de la hoja.
+   - "target_unit": la unidad que pide la hoja.
+   - Las medidas van como números en metros, solo las que apliquen:
+     · "alto" = el espesor. Es lo que hace falta para pasar de m² a m³.
+     · "ancho" = para pasar de m a m².
+     · "largo" y "pieces" = solo si el item está en unidades sueltas y hay que expresarlo como medida.
+   - LEÉ la medida EN LA HOJA. Casi siempre está ahí (un espesor, un ancho, una sección). Puede estar en centímetros: pasala a metros vos (15 cm = 0.15).
+   - Si la hoja NO trae la medida y tampoco está en el item, mandá igual la operación SIN la medida: el sistema le va a avisar al usuario exactamente qué falta. NO la inventes ni la estimes.
+
+2) CAMBIAR cantidad, precio o nombre que pide la hoja:
+   {"action":"update","num":N,"quantity":N,"unit_price":N,"name":"..."} — solo los campos que cambian.
+
+3) AGREGAR un item que está en la hoja y no en el presupuesto:
+   {"action":"add","item":{"name":"...","detail":"...","quantity":N,"unit":"...","unit_price":N}}
+   Si la hoja no dice el precio, poné 0: que lo complete él. NO inventes precios que el municipio no pidió.
+
+4) BORRAR un item que la hoja pide sacar: {"action":"remove","num":N}
+
+Reglas duras:
+- Asociá cada línea de la hoja con su item por la DESCRIPCIÓN, no por el orden: las hojas suelen venir reordenadas.
+- Si una línea de la hoja no matchea con ninguno de los items, va a "sin_match". NO la fuerces contra el item más parecido.
+- Si no estás seguro de un número que leíste en la foto (está borroso, cortado o tachado), NO lo uses: mencionalo en el summary.
+- Vos NO hacés ninguna cuenta de conversión. Solo decís qué unidad piden y qué medida leíste; el sistema calcula cantidad y precio con matemática exacta.
+- Si la imagen no es una hoja de presupuesto o no se entiende nada, devolvé {"ops":[],"summary":"No pude leer la hoja: ...","sin_match":[]}.`;
+
+const VISION_IMPORT_SYSTEM = `Sos un presupuestista argentino. Te paso la foto o el escaneo de un presupuesto, una planilla o una lista de trabajos, y lo convertís en items estructurados.
+
+Reglas:
+- Devolvé SOLO un JSON con esta forma exacta: {"items":[{"name":"...","detail":"...","quantity":N,"unit":"...","unit_price":N}]}
+- Leé la tabla tal como está: NO inventes items que no aparecen.
+- "unit": una de las etiquetas de la lista de unidades de abajo, tal cual está escrita.
+- OJO con la columna de precio: si la planilla trae "Importe" o "Total" (precio ya multiplicado por la cantidad) y no un precio unitario, dividí ese total por la cantidad para obtener el unitario. Si trae las dos columnas, usá la de precio unitario.
+- Si un número está borroso o cortado, poné 0 antes que adivinar.
+- Si no se entiende nada o no es una lista de trabajos, devolvé {"items":[]}.`;
+
+const IMAGE_TYPES = {
+    jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+    webp: 'image/webp', gif: 'image/gif', heic: 'image/heic', heif: 'image/heif',
+};
+
+// La imagen viaja como body crudo, mismo patrón que la importación de archivos y
+// el audio. Los items NO viajan acá: se leen de la base por budget_id, así el
+// número de cada op referencia lo que está guardado de verdad.
+const rawImage = express.raw({ type: () => true, limit: '20mb' });
+
+router.post('/vision', rawImage, async (req, res) => {
+    const ext = String(req.query.ext || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const mediaType = IMAGE_TYPES[ext];
+    if (!mediaType) {
+        return res.status(400).json({ error: 'Subí una foto (JPG, PNG, WEBP o HEIC)' });
+    }
+    if (!req.body || !req.body.length) {
+        return res.status(400).json({ error: 'No llegó la imagen' });
+    }
+
+    const modo = req.query.mode === 'changes' ? 'changes' : 'import';
+    const catalog = loadUnitCatalog();
+
+    // Cuánto mide la imagen decide cuántos tokens cuesta la lectura. Si el
+    // proveedor rechaza el request por tamaño, se reintenta con una versión más
+    // chica en vez de devolverle un error al usuario: una hoja impresa se sigue
+    // leyendo bien bastante más abajo de lo que sale de la cámara.
+    const ANCHOS = [1100, 900, 700];
+
+    async function leerConReintento(fn) {
+        let ultimoError;
+        for (const ancho of ANCHOS) {
+            const preparada = await prepareForVision(req.body, mediaType, { maxWidth: ancho });
+            try {
+                return await fn({ type: 'image', ...preparada });
+            } catch (err) {
+                // Solo tiene sentido reintentar si se quejó por el tamaño.
+                const porTamaño = /\b413\b|too large|rate_limit_exceeded|tokens per minute/i.test(err.message);
+                ultimoError = err;
+                if (!porTamaño) throw err;
+                console.warn(`[vision] ${ancho}px no entró, reintento más chico`);
+            }
+        }
+        throw ultimoError;
+    }
+
+    try {
+        if (modo === 'import') {
+            const result = await leerConReintento(imagen => complete({
+                task: 'vision',
+                system: VISION_IMPORT_SYSTEM + unitsPromptBlock() + priceRefsPromptBlock(),
+                messages: [{ role: 'user', content: [imagen, { type: 'text', text: 'Convertí esta hoja en items.' }] }],
+                schema: ITEMS_SCHEMA,
+            }));
+            const items = (result.items || []).slice(0, 200).map(i => ({
+                name: String(i.name || '').slice(0, 200),
+                detail: String(i.detail || '').slice(0, 1000),
+                quantity: Number(i.quantity) || 1,
+                unit: canonicalLabel(i.unit || 'un.', catalog),
+                unit_price: Number(i.unit_price) || 0,
+            })).filter(i => i.name.trim());
+            return res.json({ mode: 'import', items });
+        }
+
+        // Modo "hoja de cambios": necesita contra qué comparar.
+        const budgetId = Number(req.query.budget);
+        if (!Number.isInteger(budgetId)) {
+            return res.status(400).json({ error: 'Falta el presupuesto a comparar' });
+        }
+        const current = db.prepare('SELECT * FROM items WHERE budget_id = ? ORDER BY position, id').all(budgetId);
+        if (!current.length) {
+            return res.status(422).json({ error: 'Este presupuesto no tiene items todavía. Cargalos primero y después subí la hoja de cambios.' });
+        }
+
+        const itemsForPrompt = current.map((it, i) => ({
+            num: i + 1,
+            name: it.name || '',
+            detail: it.detail || '',
+            quantity: it.quantity,
+            unit: it.unit,
+            unit_price: it.unit_price,
+            total: Math.round(((Number(it.quantity) || 0) * (Number(it.unit_price) || 0)) * 100) / 100,
+        }));
+
+        const result = await leerConReintento(imagen => complete({
+            task: 'vision',
+            system: CHANGES_SYSTEM + unitsPromptBlock() + priceRefsPromptBlock(),
+            messages: [{
+                role: 'user',
+                content: [
+                    imagen,
+                    { type: 'text', text: `Presupuesto actual:\n${JSON.stringify(itemsForPrompt).slice(0, 8000)}` },
+                ],
+            }],
+            // Sin schema, igual que /command: las ops distinguen campo ausente de
+            // campo vacío (ver server/ai/schemas.js).
+            expectJson: true,
+        }));
+
+        const { ops, warnings } = normalizeOps(result.ops, current, catalog, 200);
+
+        const sinMatch = (Array.isArray(result.sin_match) ? result.sin_match : [])
+            .slice(0, 10).map(s => String(s).slice(0, 200)).filter(Boolean);
+
+        let summary = String(result.summary || '').slice(0, 400);
+        // Lo que no se pudo convertir y lo que no matcheó se dice, no se esconde:
+        // una hoja mal leída en silencio es peor que una hoja no leída.
+        const avisos = [
+            ...warnings,
+            ...sinMatch.map(s => `En la hoja dice "${s}" pero no encontré a qué item corresponde.`),
+        ];
+        if (avisos.length) summary = [summary, ...avisos].filter(Boolean).join(' ').slice(0, 900);
+        if (!ops.length && !summary) summary = 'No encontré cambios para aplicar en esa hoja.';
+
+        res.json({ mode: 'changes', ops, summary, warnings: avisos });
+    } catch (err) {
+        console.error('[ai/vision]', err.message);
+        const limite = /\b429\b|rate_limit/i.test(err.message);
+        res.status(502).json({ error: limite
+            ? 'Se alcanzó el límite diario de IA. Probá de nuevo más tarde.'
+            : 'No se pudo leer la imagen. Probá con una foto más nítida.' });
     }
 });
 
