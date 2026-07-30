@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import db from '../db.js';
+import db, { loadUnitCatalog } from '../db.js';
+import { canonicalLabel } from '../lib/units.js';
 
 const router = Router();
 
@@ -61,6 +62,11 @@ router.delete('/:id', (req, res) => {
 
 // Guardado simple: el frontend manda el set completo de items y se reemplaza.
 const replaceItems = db.transaction((budgetId, items) => {
+    // La unidad se normaliza contra el catálogo al guardar, así no vuelve a
+    // entrar "m2" o "metros cuadrados" por ningún camino (dictado, importación,
+    // IA o un teclado). Las unidades propias del usuario pasan tal cual.
+    const catalog = loadUnitCatalog();
+
     db.prepare('DELETE FROM items WHERE budget_id = ?').run(budgetId);
     const insert = db.prepare(
         'INSERT INTO items (budget_id, name, quantity, unit, unit_price, position, detail) VALUES (?, ?, ?, ?, ?, ?, ?)'
@@ -70,7 +76,7 @@ const replaceItems = db.transaction((budgetId, items) => {
             budgetId,
             String(item.name || '').trim() || 'Item',
             Number(item.quantity) || 0,
-            String(item.unit || 'un.').trim(),
+            canonicalLabel(item.unit || 'un.', catalog),
             Number(item.unit_price) || 0,
             i,
             String(item.detail || '').slice(0, 1000)
