@@ -4,7 +4,7 @@ import { complete, transcribeAudio } from '../ai/provider.js';
 import { ITEMS_SCHEMA, TEXTS_SCHEMA, SUGGESTIONS_SCHEMA, CLIENT_SCHEMA } from '../ai/schemas.js';
 import { normalizeOps } from '../lib/ops.js';
 import { canonicalLabel } from '../lib/units.js';
-import { prepareForVision } from '../lib/images.js';
+import { conReintentoDeTamaño } from '../lib/images.js';
 import db, { loadUnitCatalog } from '../db.js';
 import { priceRefsPromptBlock } from './prices.js';
 import { unitsPromptBlock } from './units.js';
@@ -349,28 +349,7 @@ router.post('/vision', rawImage, async (req, res) => {
     const modo = req.query.mode === 'changes' ? 'changes' : 'import';
     const catalog = loadUnitCatalog();
 
-    // Cuánto mide la imagen decide cuántos tokens cuesta la lectura. Si el
-    // proveedor rechaza el request por tamaño, se reintenta con una versión más
-    // chica en vez de devolverle un error al usuario: una hoja impresa se sigue
-    // leyendo bien bastante más abajo de lo que sale de la cámara.
-    const ANCHOS = [1100, 900, 700];
-
-    async function leerConReintento(fn) {
-        let ultimoError;
-        for (const ancho of ANCHOS) {
-            const preparada = await prepareForVision(req.body, mediaType, { maxWidth: ancho });
-            try {
-                return await fn({ type: 'image', ...preparada });
-            } catch (err) {
-                // Solo tiene sentido reintentar si se quejó por el tamaño.
-                const porTamaño = /\b413\b|too large|rate_limit_exceeded|tokens per minute/i.test(err.message);
-                ultimoError = err;
-                if (!porTamaño) throw err;
-                console.warn(`[vision] ${ancho}px no entró, reintento más chico`);
-            }
-        }
-        throw ultimoError;
-    }
+    const leerConReintento = (fn) => conReintentoDeTamaño(req.body, mediaType, fn);
 
     try {
         if (modo === 'import') {

@@ -20,6 +20,7 @@ import { complete, completeStream, webSearch } from '../ai/provider.js';
 import { normalizeOps } from '../lib/ops.js';
 import { simulate, simulationToOps } from '../lib/simulate.js';
 import { partialString } from '../lib/partial-json.js';
+import { conReintentoDeTamaño } from '../lib/images.js';
 import { priceRefsPromptBlock } from './prices.js';
 import { unitsPromptBlock } from './units.js';
 
@@ -61,6 +62,13 @@ CUÁNDO USAR CADA UNO
 3) "web_query" — cuando pregunta por precios de mercado ACTUALES que no están en su tarifario.
    Ej: "¿a cuánto está la bolsa de cemento?" → "precio bolsa cemento 50kg Argentina hoy"
    Poné la consulta y NADA más (sin "reply" largo): te vuelvo a preguntar con los resultados y ahí contestás.
+
+SI TE MANDA UNA FOTO
+Puede ser tres cosas, fijate cuál:
+- LA HOJA DE CAMBIOS que le devolvió el municipio o el cliente: compará contra los items que tiene cargados y devolvé las "ops" que correspondan (casi siempre conversiones de unidad). La medida que hace falta para convertir (el espesor, el ancho) SUELE ESTAR EN LA HOJA: leela de ahí, no la inventes. Si viene en centímetros pasala a metros (15 cm = 0.15). Si una línea de la hoja no matchea con ningún item, decíselo en "reply" en vez de forzarla.
+- UNA LISTA DE TRABAJOS para cargar: devolvé "ops" con action "add". Si la hoja no dice el precio, poné 0 y avisale que lo complete.
+- EL LUGAR DE LA OBRA (una pared, un terreno, un techo): describí lo que ves y, si te da datos para estimar, proponé los items con "ops". Aclarale siempre que es una estimación a ojo desde una foto.
+Si un número está borroso o cortado, NO lo adivines: decilo en "reply".
 
 REGLAS QUE NO SE ROMPEN
 - Nunca inventes un precio del tarifario. Si no está, decilo y ofrecé buscarlo.
@@ -176,7 +184,7 @@ const MAX_HISTORIAL = 14;   // mensajes previos que se le mandan al modelo
  * `onDelta` es opcional: si viene, se le pasa el texto de la respuesta a medida
  * que lo escribe el modelo.
  */
-async function responder(chat, texto, itemNum, onDelta) {
+async function responder(chat, texto, itemNum, onDelta, imagen) {
     const items = itemsStmt.all(chat.budget_id);
     const catalog = loadUnitCatalog();
 
@@ -200,6 +208,29 @@ async function responder(chat, texto, itemNum, onDelta) {
         ...previos.map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content })),
     ];
 
+    // Con foto la tarea es 'vision': va al modelo que sabe mirar, que además es
+    // el que el plan manda usar cuando equivocarse sale caro.
+    const tarea = imagen ? 'vision' : 'chat';
+
+    // La foto va pegada al último mensaje del usuario, que es el que la mandó.
+    // El prompt del chat ya es largo, así que acá se arranca con la imagen más
+    // chica que en la importación: entre el system, el presupuesto y el
+    // histórico queda poco margen de tokens.
+    const conFoto = (mensajesBase, fn) => imagen
+        ? conReintentoDeTamaño(
+            Buffer.from(imagen.data, 'base64'),
+            imagen.mediaType,
+            (img) => {
+                const copia = mensajesBase.slice();
+                const ultimo = copia[copia.length - 1];
+                const textoUltimo = typeof ultimo?.content === 'string' ? ultimo.content : texto;
+                copia[copia.length - 1] = { role: 'user', content: [img, { type: 'text', text: textoUltimo }] };
+                return fn(copia);
+            },
+            [900, 700, 550],
+        )
+        : fn(mensajesBase);
+
     // Lo que llega es el JSON a medio escribir; se le va sacando el campo "reply"
     // para mostrarlo (ver server/lib/partial-json.js).
     let crudo = '';
@@ -217,7 +248,8 @@ async function responder(chat, texto, itemNum, onDelta) {
     let respuesta;
     if (emitir) {
         try {
-            respuesta = await completeStream({ task: 'chat', system, messages: mensajes, expectJson: true }, emitir);
+            respuesta = await conFoto(mensajes, (msgs) =>
+                completeStream({ task: tarea, system, messages: msgs, expectJson: true }, emitir));
         } catch (err) {
             // El streaming va sin modo JSON estricto para que sea streaming de
             // verdad (ver providers/groq.js), así que de vez en cuando el modelo
@@ -225,11 +257,13 @@ async function responder(chat, texto, itemNum, onDelta) {
             // modo estricto en lugar de perderle el mensaje.
             if (!/JSON/i.test(err.message)) throw err;
             console.warn('[chat] el stream no devolvió JSON válido, reintento sin streaming');
-            respuesta = await complete({ task: 'chat', system, messages: mensajes, expectJson: true });
+            respuesta = await conFoto(mensajes, (msgs) =>
+                complete({ task: tarea, system, messages: msgs, expectJson: true }));
             rehizo = true;   // lo que se mostró quedó viejo
         }
     } else {
-        respuesta = await complete({ task: 'chat', system, messages: mensajes, expectJson: true });
+        respuesta = await conFoto(mensajes, (msgs) =>
+            complete({ task: tarea, system, messages: msgs, expectJson: true }));
     }
 
     // Segunda pasada: pidió buscar precios en internet. Se hace la búsqueda y
@@ -333,12 +367,26 @@ function mensajeDeError(err) {
         : 'El asistente no pudo responder. Probá de nuevo.';
 }
 
+const TIPOS_IMAGEN = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic', 'image/heif']);
+
 function leerPedido(req) {
     const texto = String(req.body?.text || '').trim();
     if (!texto) return { error: 'Falta el mensaje' };
     if (texto.length > 2000) return { error: 'Mensaje demasiado largo' };
+
+    // Foto adjunta, en base64. Viene ya achicada del navegador salvo que no haya
+    // podido (HEIC): en ese caso la achica prepareForVision antes de mandarla.
+    let imagen = null;
+    const cruda = req.body?.image;
+    if (cruda?.data) {
+        if (!TIPOS_IMAGEN.has(String(cruda.mediaType))) {
+            return { error: 'Ese formato de imagen no lo puedo leer' };
+        }
+        imagen = { data: String(cruda.data), mediaType: String(cruda.mediaType) };
+    }
+
     // El item señalado desde el atajo ("estoy hablando del item 3").
-    return { texto, itemNum: Number(req.body?.item_num) || null };
+    return { texto, itemNum: Number(req.body?.item_num) || null, imagen };
 }
 
 router.post('/chats/:id/messages', async (req, res) => {
@@ -352,7 +400,7 @@ router.post('/chats/:id/messages', async (req, res) => {
         .run(chat.id, 'user', pedido.texto);
 
     try {
-        const out = await responder(chat, pedido.texto, pedido.itemNum);
+        const out = await responder(chat, pedido.texto, pedido.itemNum, null, pedido.imagen);
         res.json(out);
     } catch (err) {
         console.error('[chat]', err.message);
@@ -388,7 +436,7 @@ router.post('/chats/:id/messages/stream', async (req, res) => {
     const enviar = (evento, dato) => res.write(`event: ${evento}\ndata: ${JSON.stringify(dato)}\n\n`);
 
     try {
-        const out = await responder(chat, pedido.texto, pedido.itemNum, (trozo) => enviar('delta', { text: trozo }));
+        const out = await responder(chat, pedido.texto, pedido.itemNum, (trozo) => enviar('delta', { text: trozo }), pedido.imagen);
         enviar('done', out);
     } catch (err) {
         console.error('[chat/stream]', err.message);

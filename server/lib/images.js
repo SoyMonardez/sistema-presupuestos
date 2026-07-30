@@ -52,6 +52,35 @@ function runShrink(entrada, salida, anchoMax) {
 }
 
 /**
+ * Corre una lectura con imagen y, si el proveedor la rechaza por tamaño,
+ * reintenta con una versión más chica en vez de devolverle un error al usuario.
+ *
+ * Cuánto mide la imagen decide cuántos tokens cuesta la lectura, y los límites
+ * por minuto son bajos en los planes gratuitos. Una hoja impresa —que es lo que
+ * se fotografía acá— se sigue leyendo bien bastante más abajo de lo que sale de
+ * la cámara, así que bajar la resolución es mejor que fallar.
+ *
+ * @param {(imagen: {type:'image', data:string, mediaType:string}) => Promise<any>} fn
+ * @param {number[]} anchos  de mayor a menor
+ */
+export async function conReintentoDeTamaño(buffer, mediaType, fn, anchos = [1100, 900, 700]) {
+    let ultimoError;
+    for (const ancho of anchos) {
+        const preparada = await prepareForVision(buffer, mediaType, { maxWidth: ancho });
+        try {
+            return await fn({ type: 'image', ...preparada });
+        } catch (err) {
+            // Solo tiene sentido reintentar si se quejó por el tamaño.
+            const porTamaño = /\b413\b|too large|rate_limit_exceeded|tokens per minute/i.test(err.message);
+            ultimoError = err;
+            if (!porTamaño) throw err;
+            console.warn(`[vision] ${ancho}px no entró, reintento más chico`);
+        }
+    }
+    throw ultimoError;
+}
+
+/**
  * Deja una imagen lista para el modelo de visión.
  *
  * Si algo falla al achicarla, devuelve la original en vez de romper: es mejor

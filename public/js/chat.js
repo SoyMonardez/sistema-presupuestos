@@ -46,6 +46,14 @@ const Chat = (() => {
             chip.addEventListener('click', () => enviar(chip.textContent));
         });
 
+        $('#chat-attach').addEventListener('click', () => $('#chat-file').click());
+        $('#chat-file').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            e.target.value = '';           // permite volver a elegir la misma foto
+            if (file) await adjuntar(file);
+        });
+        $('#chat-attach-remove').addEventListener('click', quitarAdjunto);
+
         $('#chat-new').addEventListener('click', nuevaConversacion);
         $('#chat-history').addEventListener('click', abrirListaChats);
         $('#chats-modal-close').addEventListener('click', () => Nav.popLayer());
@@ -56,6 +64,7 @@ const Chat = (() => {
         chatId = null;
         opsPendientes = null;
         itemFoco = null;
+        quitarAdjunto();
         $('#chat-messages').innerHTML = '';
         $('#chat-empty').hidden = false;
         $('#chat-title').textContent = titulo;
@@ -153,6 +162,82 @@ const Chat = (() => {
         el.style.height = Math.min(el.scrollHeight, 140) + 'px';
     }
 
+    // ================= Adjuntar una foto =================
+    // La foto se achica ACÁ, antes de subirla. El servidor igual la vuelve a
+    // achicar, pero eso no ayuda con lo que importa en la obra: subir 4 MB con
+    // media barra de señal. Achicada son unos 150 kb y sube al toque.
+    const FOTO_ANCHO_MAX = 1400;
+    const FOTO_MAX_BYTES = 8 * 1024 * 1024;
+
+    let adjunto = null;   // { data (base64 sin encabezado), mediaType, nombre }
+
+    function achicarFoto(file) {
+        return new Promise((resolve, reject) => {
+            const url = URL.createObjectURL(file);
+            const img = new Image();
+            img.onload = () => {
+                URL.revokeObjectURL(url);
+                const escala = Math.min(1, FOTO_ANCHO_MAX / img.width);
+                const w = Math.round(img.width * escala);
+                const h = Math.round(img.height * escala);
+                const canvas = document.createElement('canvas');
+                canvas.width = w;
+                canvas.height = h;
+                canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+                resolve({ data: dataUrl.split(',')[1], mediaType: 'image/jpeg' });
+            };
+            img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('formato no soportado')); };
+            img.src = url;
+        });
+    }
+
+    function leerCrudo(file) {
+        return new Promise((resolve, reject) => {
+            const fr = new FileReader();
+            fr.onload = () => resolve({
+                data: String(fr.result).split(',')[1],
+                mediaType: file.type || 'image/jpeg',
+            });
+            fr.onerror = () => reject(new Error('No se pudo leer el archivo'));
+            fr.readAsDataURL(file);
+        });
+    }
+
+    async function adjuntar(file) {
+        if (!/^image\//.test(file.type) && !/\.(jpe?g|png|webp|heic|heif)$/i.test(file.name)) {
+            cfg.toast('Por ahora solo puedo leer fotos', true);
+            return;
+        }
+        if (file.size > FOTO_MAX_BYTES) {
+            cfg.toast('Esa foto es muy pesada. Sacale una con menos resolución.', true);
+            return;
+        }
+        try {
+            let datos;
+            try {
+                datos = await achicarFoto(file);
+            } catch {
+                // El navegador no supo dibujarla (pasa con HEIC fuera de iPhone):
+                // se manda tal cual y la achica el servidor.
+                datos = await leerCrudo(file);
+            }
+            adjunto = { ...datos, nombre: file.name };
+            $('#chat-attach-img').src = `data:${adjunto.mediaType};base64,${adjunto.data}`;
+            $('#chat-attach-name').textContent = file.name;
+            $('#chat-attach-preview').hidden = false;
+            $('#chat-input').focus();
+        } catch (err) {
+            cfg.toast(err.message || 'No pude leer esa foto', true);
+        }
+    }
+
+    function quitarAdjunto() {
+        adjunto = null;
+        $('#chat-attach-preview').hidden = true;
+        $('#chat-attach-img').removeAttribute('src');
+    }
+
     /** Se llama al abrir un presupuesto: retoma la última conversación, si hay. */
     async function open() {
         limpiarPantalla();
@@ -176,7 +261,12 @@ const Chat = (() => {
 
     async function enviar(texto) {
         texto = String(texto || '').trim();
-        if (!texto || enviando) return;
+        if (enviando) return;
+        // Con una foto adjunta se puede mandar sin escribir nada: la foto ES el
+        // mensaje. Se le pone un texto por defecto para que el modelo sepa qué
+        // hacer con ella.
+        if (!texto && adjunto) texto = '¿Qué ves en esta foto? Si es una hoja de cambios, decime qué piden.';
+        if (!texto) return;
 
         // Si hay algo esperando confirmación, un "sí" suelto lo aplica: la frase
         // ES la confirmación, no hace falta que además toque el botón.
@@ -200,10 +290,15 @@ const Chat = (() => {
             }
         }
 
+        // La foto se saca del estado ANTES de mandarla, así la barra queda libre
+        // para escribir el siguiente mensaje mientras este viaja.
+        const foto = adjunto;
+        quitarAdjunto();
+
         $('#chat-input').value = '';
         autoGrow();
         $('#chat-empty').hidden = true;
-        pintar('user', texto);
+        pintar('user', texto, foto ? { image: foto } : null);
 
         enviando = true;
         $('#chat-send').disabled = true;
@@ -231,7 +326,7 @@ const Chat = (() => {
                 scrollAbajo();
             };
 
-            const out = await API.streamChatMessage(chatId, texto, itemFoco, onDelta);
+            const out = await API.streamChatMessage(chatId, texto, itemFoco, onDelta, foto);
             itemFoco = null;
             $('#chat-input').placeholder = 'Escribile al asistente…';
             pensando.remove();
@@ -272,6 +367,15 @@ const Chat = (() => {
         $('#chat-empty').hidden = true;
         const wrap = document.createElement('div');
         wrap.className = `chat-msg chat-msg-${role === 'user' ? 'user' : 'assistant'}`;
+
+        // La foto que mandó, arriba de su texto.
+        if (data?.image) {
+            const img = document.createElement('img');
+            img.className = 'chat-photo';
+            img.alt = 'Foto adjunta';
+            img.src = `data:${data.image.mediaType};base64,${data.image.data}`;
+            wrap.appendChild(img);
+        }
 
         const burbuja = document.createElement('div');
         burbuja.className = 'chat-bubble';
