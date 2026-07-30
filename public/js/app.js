@@ -255,6 +255,7 @@
         renderItems();
         show('editor');
         tabs?.go(0, { animate: false });
+        Chat.open();
 
         // El editor es una capa: el gesto de volver del celular lleva a la lista,
         // no saca de la app.
@@ -1296,6 +1297,28 @@
     // ================= Init =================
     (async function init() {
         Theme.init();
+
+        // El chat no toca los items por su cuenta: se le pasan los enganches y
+        // todo lo que modifica el presupuesto sigue pasando por acá.
+        Chat.init({
+            getBudgetId: () => currentBudget?.id,
+            getItems: () => items,
+            applyOps: (ops) => {
+                // Mismo orden que el panel de borrador: primero editar (los
+                // índices siguen intactos), después borrar de mayor a menor, y
+                // recién al final agregar.
+                ops.filter(o => o.action === 'update').forEach(op => {
+                    if (items[op.num - 1]) Object.assign(items[op.num - 1], op.fields);
+                });
+                ops.filter(o => o.action === 'remove').map(o => o.num).sort((a, b) => b - a)
+                    .forEach(num => items.splice(num - 1, 1));
+                ops.filter(o => o.action === 'add').forEach(op => items.push(op.item));
+                renderItems();
+                scheduleSave();
+                toast('Cambios aplicados');
+            },
+            toast,
+        });
 
         // Pestañas del editor: Presupuesto · Asistente · PDF
         tabs = Nav.setupTabs({

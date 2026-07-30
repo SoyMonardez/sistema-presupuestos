@@ -30,8 +30,12 @@ const TASK_DEFAULTS = {
     spellcheck:  { maxTokens: 2500, temperature: 0,    effort: 'low' },
     parse:       { maxTokens: 2500, temperature: 0.2,  effort: 'medium' },
     client_data: { maxTokens: 300,  temperature: 0,    effort: 'low' },
-    command:     { maxTokens: 8000, temperature: 0.15, effort: 'medium' },
-    chat:        { maxTokens: 8000, temperature: 0.3,  effort: 'medium' },
+    // Estos tres devuelven JSON acotado (una tanda de ops, una respuesta de chat),
+    // no prosa larga. Pedir 8000 tokens de salida no los hacía mejores y sí hacía
+    // rebotar el request entero: Groq descuenta max_tokens del presupuesto por
+    // minuto ANTES de correr nada, así que un techo alto se paga aunque no se use.
+    command:     { maxTokens: 3000, temperature: 0.15, effort: 'medium' },
+    chat:        { maxTokens: 2500, temperature: 0.3,  effort: 'medium' },
     // Ojo con maxTokens acá: Groq lo suma al presupuesto de tokens por minuto
     // ANTES de correr nada, así que pedir 8000 de salida hacía rebotar cualquier
     // foto por límite de cuota aunque la imagen fuera chica. Pero tampoco puede
