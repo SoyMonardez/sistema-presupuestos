@@ -15,6 +15,7 @@
     let saveTimer = null;
     let suggestTimer = null;
     let suggestTarget = null;   // input de nombre activo para sugerencias
+    let tabs = null;            // control de las pestañas del editor (nav.js)
 
     // ================= Navegación =================
     function show(name) {
@@ -74,11 +75,22 @@
         if (!n) return '';
         return fmtMoneyInput(String(n).replace('.', ','));
     }
-    // Crece la altura de un textarea según el contenido
+    // Crece la altura de un textarea según el contenido.
+    // Solo escribe si la altura cambió de verdad, y nunca achica mientras el campo
+    // tiene el foco: reescribir style.height en cada tecla era una de las cosas
+    // que hacían saltar la pantalla mientras se escribía en el celular.
     function autoGrow(el) {
         if (!el || el.offsetParent === null || el.clientWidth < 40) return; // sin layout válido todavía
+        const actual = parseFloat(el.style.height) || 0;
+        const enfocado = document.activeElement === el;
+
         el.style.height = 'auto';
-        el.style.height = Math.min(Math.max(el.scrollHeight, 22), 520) + 'px';
+        const deseada = Math.min(Math.max(el.scrollHeight, 22), 520);
+        // Con el foco puesto solo crece; achicar mueve todo lo de alrededor.
+        const nueva = enfocado ? Math.max(deseada, actual) : deseada;
+
+        if (nueva !== actual) el.style.height = nueva + 'px';
+        else el.style.height = actual + 'px';
     }
 
     // ================= Login =================
@@ -99,11 +111,15 @@
 
     $('#btn-logout').addEventListener('click', () => {
         API.clearToken();
+        currentBudget = null;
+        Nav.closeAll();     // que no queden capas colgadas en el historial
         show('login');
     });
 
     window.addEventListener('auth-expired', () => {
         toast('Tu sesión venció, entrá de nuevo', true);
+        currentBudget = null;
+        Nav.closeAll();
         show('login');
     });
 
@@ -147,6 +163,11 @@
         prices = (await API.getPrices()).map(p => ({ name: p.name, unit: p.unit, price: p.price }));
         renderPrices();
         show('prices');
+        Nav.pushLayer('prices', async () => {
+            clearTimeout(pricesTimer);
+            try { await API.savePrices(prices); } catch {}
+            await openList();
+        });
     }
 
     function schedulePricesSave() {
@@ -196,11 +217,7 @@
     }
 
     $('#btn-prices').addEventListener('click', () => openPrices().catch(err => toast(err.message, true)));
-    $('#btn-prices-back').addEventListener('click', async () => {
-        clearTimeout(pricesTimer);
-        try { await API.savePrices(prices); } catch {}
-        await openList();
-    });
+    $('#btn-prices-back').addEventListener('click', () => Nav.popLayer());
     $('#btn-add-price').addEventListener('click', () => {
         prices.push({ name: '', unit: 'un.', price: 0 });
         renderPrices();
@@ -234,6 +251,14 @@
         hideAIPanel();
         renderItems();
         show('editor');
+        tabs?.go(0, { animate: false });
+
+        // El editor es una capa: el gesto de volver del celular lleva a la lista,
+        // no saca de la app.
+        Nav.pushLayer('editor', async () => {
+            await flushSave();
+            await openList();
+        });
     }
 
     // ================= Formato del PDF =================
@@ -331,16 +356,14 @@
         }
     });
 
-    $('#btn-back').addEventListener('click', async () => {
-        await flushSave();
-        await openList();
-    });
+    // La flecha de volver y el gesto del celular hacen exactamente lo mismo.
+    $('#btn-back').addEventListener('click', () => Nav.popLayer());
 
     $('#btn-delete').addEventListener('click', async () => {
         if (!confirm('¿Borrar este presupuesto? No se puede deshacer.')) return;
         await API.deleteBudget(currentBudget.id);
-        currentBudget = null;
-        await openList();
+        currentBudget = null;   // flushSave se saltea solo si no hay presupuesto
+        Nav.popLayer();
     });
 
     // Guardado con debounce
@@ -506,14 +529,20 @@
             autoGrow(nameEl); autoGrow(detailEl);
             (focusField === 'detail' ? detailEl : nameEl).focus();
         });
+        Nav.pushLayer('item-modal', hideItemModal);
     }
-    function closeItemModal() {
+
+    // El cierre real. Lo corre Nav, venga del botón o del gesto del celular.
+    function hideItemModal() {
         $('#item-modal').hidden = true;
         document.body.classList.remove('modal-open');
         hideSuggest();
         modalIndex = -1;
         renderItems();   // refresca el texto de las tarjetas
     }
+    // Lo que llaman los botones de la pantalla: pasa por el historial para que
+    // el gesto y el botón no se puedan desincronizar.
+    function closeItemModal() { Nav.popLayer(); }
 
     $('#item-modal-name').addEventListener('input', () => {
         if (modalIndex < 0) return;
@@ -533,9 +562,6 @@
     $('#item-modal-done').addEventListener('click', closeItemModal);
     $('#item-modal-close').addEventListener('click', closeItemModal);
     $('#item-modal').addEventListener('click', (e) => { if (e.target.id === 'item-modal') closeItemModal(); });
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && !$('#item-modal').hidden) closeItemModal();
-    });
 
     // ================= Modal de conversión de unidades =================
     // Dado un precio total fijo (el trabajo que se cobra) + medidas de 1 pieza + cantidad
@@ -556,12 +582,14 @@
         $('#convert-modal').hidden = false;
         document.body.classList.add('modal-open');
         requestAnimationFrame(() => $('#conv-total').focus());
+        Nav.pushLayer('convert-modal', hideConvertModal);
     }
-    function closeConvertModal() {
+    function hideConvertModal() {
         $('#convert-modal').hidden = true;
         document.body.classList.remove('modal-open');
         convertIndex = -1;
     }
+    function closeConvertModal() { Nav.popLayer(); }
 
     const CONVERT_UNITS = [
         { key: 'lineal', label: 'Metro lineal', unit: 'm',  dims: ['largo'] },
@@ -629,20 +657,30 @@
     });
     $('#convert-modal-close').addEventListener('click', closeConvertModal);
     $('#convert-modal').addEventListener('click', (e) => { if (e.target.id === 'convert-modal') closeConvertModal(); });
+
+    // Escape en la compu equivale al gesto de volver en el celular: cierra la
+    // capa de arriba, sea la que sea.
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && !$('#convert-modal').hidden) closeConvertModal();
+        if (e.key === 'Escape') Nav.popLayer();
     });
 
     // ================= Sugerencias IA (dentro de la modal) =================
+    // Antes esto llamaba a hideSuggest() en CADA tecla y volvía a mostrar 600 ms
+    // después. Como la caja estaba en el flujo, colapsaba y expandía todo el rato.
+    // Ahora las sugerencias viejas se quedan hasta que llegan las nuevas, y la
+    // caja flota (ver .modal-suggest en el CSS), así que ya no empuja nada.
     function scheduleSuggest(inputEl, item) {
         clearTimeout(suggestTimer);
-        hideSuggest();
         const query = inputEl.value.trim();
-        if (query.length < 3) return;
+        if (query.length < 3) { hideSuggest(); return; }
+
         suggestTimer = setTimeout(async () => {
             try {
                 const { suggestions } = await API.aiSuggest(query, items);
-                if (!suggestions.length || document.activeElement !== inputEl) return;
+                // Si mientras tanto se fue del campo o cambió lo que escribió,
+                // no pisamos nada.
+                if (document.activeElement !== inputEl) return;
+                if (!suggestions.length) { hideSuggest(); return; }
                 showSuggest(suggestions, item);
             } catch { /* sugerencias son best-effort */ }
         }, 600);
@@ -951,6 +989,19 @@
 
     // ================= Init =================
     (async function init() {
+        Theme.init();
+
+        // Pestañas del editor: Presupuesto · Asistente · PDF
+        tabs = Nav.setupTabs({
+            track: $('#editor-track'),
+            buttons: [...document.querySelectorAll('.tab-btn')],
+            onChange: (i) => {
+                // El total no aporta nada en la pestaña del asistente y ahí el
+                // espacio vertical se necesita para la conversación.
+                $('#view-editor').querySelector('.totalbar').hidden = (i === 1);
+            },
+        });
+
         if (!API.getToken()) return show('login');
         try {
             await openList();

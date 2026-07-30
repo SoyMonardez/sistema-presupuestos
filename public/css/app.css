@@ -1,17 +1,36 @@
 /* Sistema de Presupuestos — mobile-first, botones grandes */
 
+/* Tema claro: gris cálido, no blanco puro, que al sol cansa menos la vista. */
 :root {
-    --bg:        #14161f;
-    --surface:   #1e2130;
-    --surface-2: #272b3d;
-    --border:    #343a52;
-    --text:      #eef0f6;
-    --text-dim:  #9aa1b9;
-    --primary:   #4f7cff;
-    --primary-h: #3d66e0;
-    --green:     #34c98e;
-    --red:       #e85d5d;
-    --radius:    12px;
+    --bg:         #f6f5f3;
+    --surface:    #ffffff;
+    --surface-2:  #ebe9e5;
+    --border:     #dad7d1;
+    --text:       #1b1a18;
+    --text-dim:   #6a6760;
+    --primary:    #2563eb;
+    --primary-h:  #1d4ed8;
+    --on-primary: #ffffff;
+    --green:      #15803d;
+    --red:        #dc2626;
+    --shadow:     0 1px 2px rgba(0,0,0,.06), 0 4px 14px rgba(0,0,0,.05);
+    --radius:     12px;
+}
+
+/* Tema oscuro: negros neutros, ni negro puro ni azulados. */
+:root[data-theme="dark"] {
+    --bg:         #141416;
+    --surface:    #1c1c1f;
+    --surface-2:  #26262b;
+    --border:     #35353b;
+    --text:       #ecebe9;
+    --text-dim:   #9b9892;
+    --primary:    #5b8cff;
+    --primary-h:  #4a7bee;
+    --on-primary: #ffffff;
+    --green:      #3ddc97;
+    --red:        #ef6b6b;
+    --shadow:     0 1px 2px rgba(0,0,0,.4), 0 4px 16px rgba(0,0,0,.35);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -53,7 +72,9 @@ body {
     -webkit-tap-highlight-color: transparent;
 }
 .btn:active { transform: scale(.97); }
-.btn-primary { background: var(--primary); }
+/* El texto sobre el color de acento siempre va claro: en tema claro, heredar
+   --text daría gris oscuro sobre azul y no se leería. */
+.btn-primary { background: var(--primary); color: var(--on-primary); }
 .btn-primary:hover { background: var(--primary-h); }
 .btn-secondary { background: var(--surface-2); border: 1px solid var(--border); }
 .btn-ghost { background: transparent; color: var(--text-dim); border: 1px dashed var(--border); }
@@ -802,3 +823,223 @@ body.modal-open { overflow: hidden; }
     display: inline-block;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ===================================================================
+   Layout de pestañas (editor)
+   =================================================================== */
+/* El editor deja de scrollear como página: es una columna fija y cada
+   pestaña scrollea por dentro. Es lo que hace que se sienta app y no web. */
+.view-tabbed {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+    padding: 0;
+    min-height: 0;
+}
+.view-tabbed .topbar { flex: 0 0 auto; padding: 12px 16px; margin: 0; }
+
+.tab-viewport {
+    flex: 1 1 auto;
+    overflow: hidden;
+    position: relative;
+    min-height: 0;
+}
+.tab-track {
+    display: flex;
+    height: 100%;
+    will-change: transform;
+    transform: translate3d(0, 0, 0);
+}
+.tab-pane {
+    flex: 0 0 100%;
+    width: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+    padding: 4px 16px 28px;
+}
+
+/* ============ Barra inferior de pestañas ============ */
+.tabbar {
+    flex: 0 0 auto;
+    display: flex;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding-bottom: env(safe-area-inset-bottom);
+}
+.tab-btn {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-height: 56px;
+    padding: 7px 4px;
+    border: none;
+    background: none;
+    color: var(--text-dim);
+    font-size: 11.5px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: color .15s;
+    position: relative;
+}
+.tab-btn svg { transition: transform .18s cubic-bezier(.34,1.56,.64,1); }
+.tab-btn.active { color: var(--primary); }
+.tab-btn.active svg { transform: translateY(-1px) scale(1.06); }
+/* Marca de pestaña activa, arriba del botón */
+.tab-btn.active::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 28px;
+    height: 2.5px;
+    border-radius: 0 0 3px 3px;
+    background: var(--primary);
+}
+.tab-btn:active svg { transform: scale(.92); }
+
+/* En la vista con pestañas la barra del total deja de flotar: es una fila más
+   de la columna, siempre visible arriba de las pestañas. */
+.view-tabbed .totalbar {
+    position: static;
+    flex: 0 0 auto;
+    padding: 10px 16px;
+}
+.view-tabbed .totalbar .total-amount { font-size: 23px; }
+
+/* ============ Encabezado de sección con acción ============ */
+.section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 18px 0 10px;
+}
+.section-head .section-title { margin: 0; }
+.btn-mini {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 12.5px;
+    font-weight: 600;
+    padding: 7px 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    -webkit-tap-highlight-color: transparent;
+}
+.btn-mini:hover { color: var(--text); border-color: var(--text-dim); }
+.btn-mini:active { transform: scale(.96); }
+
+/* ============ Pestaña de chat (vacía por ahora) ============ */
+.chat-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    height: 100%;
+    gap: 12px;
+    padding: 24px 20px;
+    color: var(--text-dim);
+}
+.chat-empty-title { font-size: 17px; font-weight: 700; color: var(--text); }
+.chat-empty-sub { font-size: 14px; line-height: 1.5; max-width: 34ch; }
+
+/* ===================================================================
+   Sugerencias de la IA — el arreglo del salto de pantalla
+   ===================================================================
+   Antes esta caja estaba en el flujo, entre el nombre y las especificaciones:
+   al aparecer y desaparecer en cada tecla empujaba todo lo de abajo, y como la
+   modal está anclada al fondo en el celular, el borde de arriba subía y bajaba.
+   Sacándola del flujo (absolute) ya no mueve nada: flota encima. */
+.modal-suggest {
+    position: absolute;
+    z-index: 5;
+    left: 0;
+    right: 0;
+    top: calc(100% + 6px);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    max-height: 46dvh;
+    overflow-y: auto;
+}
+/* El ancla de la caja flotante */
+.suggest-anchor { position: relative; }
+
+/* ===================================================================
+   Esqueletos de carga
+   =================================================================== */
+.skeleton {
+    position: relative;
+    overflow: hidden;
+    background: var(--surface-2);
+    border-radius: var(--radius);
+}
+.skeleton::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, rgba(127,127,127,.14), transparent);
+    animation: shimmer 1.3s infinite;
+}
+@keyframes shimmer { to { transform: translateX(100%); } }
+.skeleton-card { height: 118px; margin-bottom: 10px; }
+.skeleton-row  { height: 64px; margin-bottom: 10px; }
+
+/* ===================================================================
+   Movimiento reducido
+   =================================================================== */
+/* Si el sistema pide menos animación, se respeta: nada de parpadeos ni
+   deslizamientos. El cambio de pestaña sigue funcionando, pero seco. */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: .001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .001ms !important;
+    }
+    .tab-track { transition: none !important; }
+}
+
+/* ===================================================================
+   Modal que no se mueve al escribir
+   ===================================================================
+   El textarea del nombre crece a medida que se escribe, y como la hoja está
+   anclada al fondo, ese crecimiento le empujaba el borde de arriba: el texto
+   que estabas leyendo se iba para arriba en cada letra.
+
+   La hoja pasa a tener altura fija y el que scrollea es el cuerpo. Así el
+   textarea puede crecer todo lo que quiera sin mover ni un pixel de lo demás. */
+@media (max-width: 599px) {
+    .modal-box {
+        height: 88dvh;
+        max-height: none;
+        overflow: hidden;          /* scrollea .modal-body, no la hoja entera */
+    }
+    .modal-body {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding-right: 2px;        /* aire para la barra de scroll */
+    }
+    .modal-head, .modal-done { flex: 0 0 auto; }
+}
