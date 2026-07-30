@@ -1,10 +1,14 @@
 // Service worker mínimo: cache del shell estático, red para la API.
-const CACHE = 'presupuestos-v2';
+// Subir la versión cada vez que se agrega o renombra un archivo del shell, o el
+// celular sigue sirviendo la copia vieja y parece que los cambios no se aplicaron.
+const CACHE = 'presupuestos-v3';
 const SHELL = [
     '/',
     '/css/app.css',
     '/js/format.js',
+    '/js/theme.js',
     '/js/api.js',
+    '/js/nav.js',
     '/js/voice.js',
     '/js/pdf.js',
     '/js/app.js',
