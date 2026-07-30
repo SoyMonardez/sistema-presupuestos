@@ -6,7 +6,8 @@
 
 import { Router } from 'express';
 import db, { loadUnitCatalog } from '../db.js';
-import { KIND } from '../lib/units.js';
+import { KIND, conversionPlan } from '../lib/units.js';
+import { normalizeOp } from '../lib/ops.js';
 
 const router = Router();
 
@@ -16,6 +17,70 @@ const VALID_DIMS = new Set(['largo', 'ancho', 'alto']);
 
 router.get('/', (_req, res) => {
     res.json({ units: loadUnitCatalog() });
+});
+
+// ---------------------------------------------------------------------------
+// Conversión desde el presupuesto
+// ---------------------------------------------------------------------------
+// El botón "Convertir" del item y el de "Convertir todo" pegan acá. La cuenta la
+// hace el servidor y no el navegador a propósito: si la aritmética viviera en el
+// frontend habría dos implementaciones (la del chat y la del botón) que se
+// pueden desincronizar, que es justo lo que este plan vino a terminar.
+
+/**
+ * Qué se puede hacer con esta unidad de origen: a qué unidades llega y qué
+ * medida le falta para cada una. Es lo que dibuja el selector de destino, para
+ * no ofrecer conversiones que después van a fallar.
+ */
+router.post('/plan', (req, res) => {
+    const from = String(req.body?.from || '').trim();
+    if (!from) return res.status(400).json({ error: 'Falta la unidad de origen' });
+
+    const catalog = loadUnitCatalog();
+    const options = catalog
+        .map(u => {
+            const plan = conversionPlan(from, u.label, catalog);
+            if (!plan.ok || plan.kind === 'identity') return null;
+            return { code: u.code, label: u.label, kind: plan.kind, needs: plan.needs };
+        })
+        .filter(Boolean);
+
+    res.json({ options });
+});
+
+/**
+ * Convierte uno, varios o todos los items. Reusa la misma validación que usan
+ * los comandos de la IA (`normalizeOp` con action 'convert'), así el botón manual
+ * y el pedido hablado dan exactamente el mismo resultado.
+ *
+ * Devuelve las ops listas para el panel de confirmación — no escribe nada: el
+ * guardado sigue pasando por PUT /api/budgets/:id/items cuando el usuario acepta.
+ */
+router.post('/convert', (req, res) => {
+    const items = Array.isArray(req.body?.items) ? req.body.items : null;
+    if (!items) return res.status(400).json({ error: 'Faltan los items' });
+    if (items.length > 300) return res.status(400).json({ error: 'Demasiados items' });
+
+    const target = String(req.body?.target_unit || '').trim();
+    if (!target) return res.status(400).json({ error: 'Falta la unidad destino' });
+
+    const { ops, warnings } = normalizeOp(
+        {
+            action: 'convert',
+            target_unit: target,
+            num:    req.body?.num,
+            nums:   req.body?.nums,
+            all:    req.body?.all === true,
+            largo:  req.body?.largo,
+            ancho:  req.body?.ancho,
+            alto:   req.body?.alto,
+            pieces: req.body?.pieces,
+        },
+        items,
+        loadUnitCatalog(),
+    );
+
+    res.json({ ops, warnings });
 });
 
 // Mismo criterio que el tarifario: el frontend manda la lista completa y se

@@ -125,6 +125,9 @@
 
     // ================= Lista =================
     async function openList() {
+        // El catálogo se pide una sola vez por sesión: lo necesitan el selector de
+        // unidad de cada item y el conversor.
+        if (!unitCatalog.length) loadUnitCatalog();
         const budgets = await API.listBudgets();
         const listEl = $('#budget-list');
         listEl.innerHTML = '';
@@ -425,7 +428,7 @@
                 </div>
                 <div class="ic-fields">
                     <label class="ic-field"><span>Cantidad</span><input type="text" inputmode="decimal" class="f-qty" placeholder="1"></label>
-                    <label class="ic-field"><span>Unidad</span><input type="text" class="f-unit" placeholder="un." autocomplete="off"></label>
+                    <label class="ic-field"><span>Unidad</span><button type="button" class="f-unit" title="Elegir unidad"></button></label>
                     <label class="ic-field ic-field-price"><span>Precio por unidad</span><input type="text" inputmode="numeric" class="f-price" placeholder="$ 0"></label>
                 </div>
                 <div class="ic-foot">
@@ -468,7 +471,7 @@
                 descBtn.classList.add('empty');
             }
             qtyEl.value   = item.quantity ? String(item.quantity).replace('.', ',') : '';
-            unitEl.value  = item.unit;
+            unitEl.textContent = item.unit || 'un.';
             priceEl.value = numToInput(item.unit_price);
             if (item.detail && item.detail.trim()) toggleEl.classList.add('active');
             refreshSub();
@@ -476,13 +479,19 @@
             // Tocar la descripción o "Detalles" abre la ventana modal
             descBtn.addEventListener('click', () => openItemModal(index, 'name'));
             toggleEl.addEventListener('click', () => openItemModal(index, 'detail'));
-            card.querySelector('.ic-convert-toggle').addEventListener('click', () => openConvertModal(index));
+            card.querySelector('.ic-convert-toggle').addEventListener('click', () => openConvertModal({ index }));
 
             qtyEl.addEventListener('input', () => {
                 item.quantity = parseQty(qtyEl.value);
                 refreshSub(); updateTotal(); scheduleSave();
             });
-            unitEl.addEventListener('input', () => { item.unit = unitEl.value; scheduleSave(); });
+            unitEl.addEventListener('click', () => {
+                openUnitPicker(item.unit, (label) => {
+                    item.unit = label;
+                    unitEl.textContent = label;
+                    scheduleSave();
+                });
+            });
             priceEl.addEventListener('input', () => {
                 priceEl.value = fmtMoneyInput(priceEl.value);
                 item.unit_price = parseNum(priceEl.value);
@@ -563,100 +572,336 @@
     $('#item-modal-close').addEventListener('click', closeItemModal);
     $('#item-modal').addEventListener('click', (e) => { if (e.target.id === 'item-modal') closeItemModal(); });
 
+    function formatQty(n) {
+        return (Math.round(n * 1e6) / 1e6).toString().replace('.', ',');
+    }
+
+    // ================= Selector de unidad =================
+    // El campo de la unidad era texto libre, así que en la base convivían "m2",
+    // "M²" y "metros cuadrados" — con eso ninguna conversión era confiable.
+    // Ahora se elige de una lista y siempre se guarda la etiqueta canónica.
+    let unitCatalog = [];
+    let unitPickTarget = null;   // { onPick(label) }
+
+    async function loadUnitCatalog() {
+        try {
+            const { units } = await API.getUnits();
+            unitCatalog = units || [];
+        } catch {
+            unitCatalog = [];   // sin catálogo el selector cae a texto: no bloquea el trabajo
+        }
+    }
+
+    function openUnitPicker(currentLabel, onPick) {
+        if (!unitCatalog.length) return false;
+        unitPickTarget = { onPick };
+        const list = $('#unit-list');
+        list.innerHTML = '';
+        for (const u of unitCatalog) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'unit-option' + (u.label === currentLabel ? ' active' : '');
+            btn.innerHTML = `<span class="unit-option-label"></span><span class="unit-option-kind"></span>`;
+            btn.querySelector('.unit-option-label').textContent = u.label;
+            btn.querySelector('.unit-option-kind').textContent = KIND_LABEL[u.kind] || '';
+            btn.addEventListener('click', () => {
+                const cb = unitPickTarget?.onPick;
+                closeUnitPicker();
+                cb?.(u.label);
+            });
+            list.appendChild(btn);
+        }
+        $('#unit-modal').hidden = false;
+        document.body.classList.add('modal-open');
+        Nav.pushLayer('unit-modal', hideUnitPicker);
+        return true;
+    }
+    const KIND_LABEL = {
+        length: 'largo', area: 'superficie', volume: 'volumen',
+        count: 'cantidad', weight: 'peso', time: 'tiempo', other: '',
+    };
+    function hideUnitPicker() {
+        $('#unit-modal').hidden = true;
+        document.body.classList.remove('modal-open');
+        unitPickTarget = null;
+    }
+    function closeUnitPicker() { Nav.popLayer(); }
+
+    $('#unit-modal-close').addEventListener('click', closeUnitPicker);
+    $('#unit-modal').addEventListener('click', (e) => { if (e.target.id === 'unit-modal') closeUnitPicker(); });
+
     // ================= Modal de conversión de unidades =================
-    // Dado un precio total fijo (el trabajo que se cobra) + medidas de 1 pieza + cantidad
-    // de piezas, calcula cuánto sería la cantidad y el precio por m, m², m³ o unidad —
-    // sin que el total cambie. Evita que haya que sacar la cuenta con calculadora aparte.
-    let convertIndex = -1;
-    function openConvertModal(index) {
-        if (index < 0 || index >= items.length) return;
-        convertIndex = index;
-        const item = items[index];
-        const total = (item.quantity * item.unit_price) || 0;
-        $('#conv-total').value = total ? numToInput(total) : '';
+    // La cuenta la hace el servidor (server/lib/units.js), no este archivo: es el
+    // mismo motor que usan los comandos de la IA, así el botón manual y el pedido
+    // hablado no se pueden desincronizar.
+    //
+    // El camino normal necesita UNA sola medida: para pasar 20 m² a m³ alcanza con
+    // el espesor. Ese número viene en la hoja que le da el municipio.
+    let convertScope = null;    // { all: true } | { index }
+    let convertOptions = [];    // destinos posibles según la unidad de origen
+    let convertTarget = null;   // opción elegida
+
+    async function openConvertModal(scope) {
+        if (!items.length) { toast('No hay items para convertir', true); return; }
+        convertScope = scope;
+        convertTarget = null;
+        convertOptions = [];
         $('#conv-pieces').value = '1';
         $('#conv-largo').value = '';
         $('#conv-ancho').value = '';
         $('#conv-alto').value = '';
-        renderConvertResults();
+        $('#conv-geometry').open = false;
+
+        const esTodo = scope.all === true;
+        $('#convert-modal-title').textContent = esTodo ? 'Convertir todo el presupuesto' : 'Convertir unidad';
+
+        // Con "convertir todo" el origen puede ser mixto; se toma la unidad más
+        // usada como referencia para ofrecer destinos, y los items que no se
+        // puedan convertir se avisan después, uno por uno.
+        const from = esTodo ? unidadMasComun() : items[scope.index]?.unit;
+        renderConvertFrom(from, esTodo);
+
+        $('#conv-targets').innerHTML = '<p class="field-hint">Cargando…</p>';
+        $('#conv-measures').hidden = true;
+        $('#conv-preview').hidden = true;
+        $('#conv-geometry').hidden = true;
+        $('#convert-apply').disabled = true;
+
         $('#convert-modal').hidden = false;
         document.body.classList.add('modal-open');
-        requestAnimationFrame(() => $('#conv-total').focus());
         Nav.pushLayer('convert-modal', hideConvertModal);
+
+        try {
+            const { options } = await API.unitPlan(from);
+            convertOptions = options || [];
+        } catch {
+            convertOptions = [];
+        }
+        renderConvertTargets();
     }
+
+    function unidadMasComun() {
+        const cuenta = new Map();
+        for (const it of items) {
+            const u = (it.unit || '').trim();
+            if (u) cuenta.set(u, (cuenta.get(u) || 0) + 1);
+        }
+        let mejor = items[0]?.unit || 'un.';
+        let max = 0;
+        for (const [u, n] of cuenta) if (n > max) { max = n; mejor = u; }
+        return mejor;
+    }
+
+    function renderConvertFrom(from, esTodo) {
+        const box = $('#conv-from');
+        if (esTodo) {
+            const iguales = items.every(i => i.unit === from);
+            box.innerHTML = `
+                <span class="conv-from-label">Unidad actual</span>
+                <strong class="conv-from-unit"></strong>
+                <span class="conv-from-note"></span>`;
+            box.querySelector('.conv-from-unit').textContent = from || '—';
+            box.querySelector('.conv-from-note').textContent = iguales
+                ? `${items.length} item${items.length === 1 ? '' : 's'}`
+                : 'Los items que estén en otra unidad se avisan al final';
+            return;
+        }
+        const item = items[convertScope.index];
+        box.innerHTML = `
+            <span class="conv-from-label">Item actual</span>
+            <strong class="conv-from-unit"></strong>
+            <span class="conv-from-note"></span>`;
+        box.querySelector('.conv-from-unit').textContent =
+            `${formatQty(item.quantity)} ${item.unit} × ${formatARS(item.unit_price)}`;
+        box.querySelector('.conv-from-note').textContent =
+            `Total ${formatARS(item.quantity * item.unit_price)} — no cambia`;
+    }
+
+    function renderConvertTargets() {
+        const box = $('#conv-targets');
+        box.innerHTML = '';
+        if (!convertOptions.length) {
+            box.innerHTML = '<p class="field-hint">Esta unidad no se puede convertir a ninguna otra. Las horas, los días y los montos globales no son medidas.</p>';
+            return;
+        }
+        for (const opt of convertOptions) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'conv-target' + (convertTarget?.label === opt.label ? ' active' : '');
+            btn.innerHTML = `<span class="conv-target-unit"></span><span class="conv-target-need"></span>`;
+            btn.querySelector('.conv-target-unit').textContent = opt.label;
+            btn.querySelector('.conv-target-need').textContent =
+                opt.needs.length ? `pide ${opt.needs.join(' y ')}` : 'directo';
+            btn.addEventListener('click', () => {
+                convertTarget = opt;
+                renderConvertTargets();
+                renderConvertMeasures();
+            });
+            box.appendChild(btn);
+        }
+    }
+
+    const MEASURE_LABEL = { largo: 'Largo (m)', ancho: 'Ancho (m)', alto: 'Alto o espesor (m)' };
+
+    function renderConvertMeasures() {
+        const box = $('#conv-measures');
+        if (!convertTarget) { box.hidden = true; return; }
+
+        // Camino B (geometría de la pieza): solo tiene sentido cuando el item está
+        // contado en unidades sueltas y hay que expresarlo como medida —
+        // "12 plateas de 1.10 × 2 × 0.15" a m³. Para el resto sobra y estorba.
+        const origen = convertScope?.all ? unidadMasComun() : items[convertScope.index]?.unit;
+        $('#conv-geometry').hidden = !esConteo(origen);
+
+        box.innerHTML = '';
+        if (!convertTarget.needs.length) {
+            box.hidden = true;
+            refreshConvertPreview();
+            return;
+        }
+        for (const m of convertTarget.needs) {
+            const label = document.createElement('label');
+            label.className = 'opt-field';
+            label.innerHTML = `<span></span><input type="text" inputmode="decimal" placeholder="0" data-measure="${m}">`;
+            label.querySelector('span').textContent = MEASURE_LABEL[m] || m;
+            label.querySelector('input').addEventListener('input', refreshConvertPreview);
+            box.appendChild(label);
+        }
+        box.hidden = false;
+        requestAnimationFrame(() => box.querySelector('input')?.focus());
+        refreshConvertPreview();
+    }
+
+    function esConteo(unit) {
+        const u = unitCatalog.find(x => x.label === unit);
+        return u ? u.kind === 'count' : false;
+    }
+
+    function leerMedidas() {
+        const out = {};
+        $('#conv-measures').querySelectorAll('input[data-measure]').forEach(inp => {
+            out[inp.dataset.measure] = parseQty(inp.value) || 0;
+        });
+        const geo = $('#conv-geometry');
+        if (!geo.hidden && geo.open) {
+            out.pieces = parseQty($('#conv-pieces').value) || 0;
+            out.largo  = parseQty($('#conv-largo').value) || out.largo || 0;
+            out.ancho  = parseQty($('#conv-ancho').value) || out.ancho || 0;
+            out.alto   = parseQty($('#conv-alto').value)  || out.alto  || 0;
+        }
+        return out;
+    }
+
+    // Pide la conversión al servidor y muestra cómo quedaría, sin aplicar nada.
+    let previewTimer = null;
+    let previewOps = [];
+    function refreshConvertPreview() {
+        clearTimeout(previewTimer);
+        previewTimer = setTimeout(async () => {
+            if (!convertTarget) return;
+            const medidas = leerMedidas();
+            const faltan = (convertTarget.needs || []).filter(m => !(medidas[m] > 0));
+            const box = $('#conv-preview');
+
+            if (faltan.length && !(medidas.pieces > 0)) {
+                box.hidden = false;
+                box.className = 'conv-preview conv-preview-wait';
+                box.textContent = `Cargá ${faltan.map(m => (MEASURE_LABEL[m] || m).toLowerCase()).join(' y ')} para ver el resultado.`;
+                $('#convert-apply').disabled = true;
+                previewOps = [];
+                return;
+            }
+
+            try {
+                const { ops, warnings } = await API.convertUnits({
+                    items,
+                    target_unit: convertTarget.label,
+                    ...(convertScope.all ? { all: true } : { num: convertScope.index + 1 }),
+                    ...medidas,
+                });
+                previewOps = ops || [];
+                renderPreviewBox(previewOps, warnings || []);
+            } catch (err) {
+                box.hidden = false;
+                box.className = 'conv-preview conv-preview-error';
+                box.textContent = err.message;
+                $('#convert-apply').disabled = true;
+                previewOps = [];
+            }
+        }, 180);
+    }
+
+    function renderPreviewBox(ops, warnings) {
+        const box = $('#conv-preview');
+        box.hidden = false;
+        box.innerHTML = '';
+
+        if (!ops.length) {
+            box.className = 'conv-preview conv-preview-error';
+            box.textContent = warnings[0] || 'No se pudo convertir con esas medidas.';
+            $('#convert-apply').disabled = true;
+            return;
+        }
+
+        box.className = 'conv-preview';
+        for (const op of ops.slice(0, 6)) {
+            const cur = items[op.num - 1];
+            const row = document.createElement('div');
+            row.className = 'conv-preview-row';
+            row.innerHTML = `<span class="conv-preview-name"></span><span class="conv-preview-calc"></span>`;
+            row.querySelector('.conv-preview-name').textContent = cur?.name || `Item ${op.num}`;
+            row.querySelector('.conv-preview-calc').textContent =
+                `${formatQty(cur?.quantity)} ${cur?.unit} → ${formatQty(op.fields.quantity)} ${op.fields.unit} · ${formatARS(op.fields.unit_price)}/${op.fields.unit}`;
+            box.appendChild(row);
+        }
+        if (ops.length > 6) {
+            const mas = document.createElement('div');
+            mas.className = 'conv-preview-more';
+            mas.textContent = `y ${ops.length - 6} item${ops.length - 6 === 1 ? '' : 's'} más`;
+            box.appendChild(mas);
+        }
+        for (const w of warnings.slice(0, 4)) {
+            const av = document.createElement('div');
+            av.className = 'conv-preview-warn';
+            av.textContent = w;
+            box.appendChild(av);
+        }
+        $('#convert-apply').disabled = false;
+    }
+
     function hideConvertModal() {
         $('#convert-modal').hidden = true;
         document.body.classList.remove('modal-open');
-        convertIndex = -1;
+        convertScope = null;
+        convertTarget = null;
+        previewOps = [];
     }
     function closeConvertModal() { Nav.popLayer(); }
 
-    const CONVERT_UNITS = [
-        { key: 'lineal', label: 'Metro lineal', unit: 'm',  dims: ['largo'] },
-        { key: 'area',   label: 'Metro cuadrado', unit: 'm²', dims: ['largo', 'ancho'] },
-        { key: 'volumen', label: 'Metro cúbico', unit: 'm³', dims: ['largo', 'ancho', 'alto'] },
-        { key: 'unidad', label: 'Por unidad', unit: 'un.', dims: [] },
-    ];
+    $('#convert-apply').addEventListener('click', () => {
+        if (!previewOps.length) return;
+        const ops = previewOps;
+        const esTodo = convertScope?.all === true;
+        closeConvertModal();
 
-    function renderConvertResults() {
-        const box = $('#convert-results');
-        const total  = parseNum($('#conv-total').value);
-        const pieces = parseQty($('#conv-pieces').value) || 0;
-        const dims = {
-            largo: parseQty($('#conv-largo').value) || 0,
-            ancho: parseQty($('#conv-ancho').value) || 0,
-            alto:  parseQty($('#conv-alto').value) || 0,
-        };
-        box.innerHTML = '';
-        CONVERT_UNITS.forEach(u => {
-            const ready = pieces > 0 && u.dims.every(d => dims[d] > 0);
-            let qty = 0;
-            if (ready) {
-                qty = pieces;
-                u.dims.forEach(d => { qty *= dims[d]; });
-                qty = Math.round(qty * 1e6) / 1e6; // corta el ruido de coma flotante (0.8*0.5*0.15 etc.)
-            }
-            const unitPrice = (ready && total > 0 && qty > 0) ? Math.round((total / qty) * 100) / 100 : 0;
-
-            const row = document.createElement('div');
-            row.className = 'convert-row' + (ready ? '' : ' convert-row-disabled');
-            row.innerHTML = `
-                <div class="convert-row-info">
-                    <span class="convert-row-label">${u.label} (${u.unit})</span>
-                    <span class="convert-row-detail">${ready ? `${formatQty(qty)} ${u.unit} · ${formatARS(unitPrice)}/${u.unit}` : 'Faltan medidas'}</span>
-                </div>
-                <button type="button" class="convert-row-use" ${ready ? '' : 'disabled'}>Usar</button>`;
-            row.querySelector('.convert-row-use').addEventListener('click', () => {
-                if (convertIndex < 0) return;
-                const item = items[convertIndex];
-                item.quantity = qty;
-                item.unit = u.unit;
-                item.unit_price = unitPrice;
-                closeConvertModal();
-                renderItems();
-                scheduleSave();
-                toast('Unidad convertida a ' + u.unit);
-            });
-            box.appendChild(row);
-        });
-    }
-
-    function formatQty(n) {
-        return (Math.round(n * 100) / 100).toString().replace('.', ',');
-    }
-
-    ['#conv-total'].forEach(sel => {
-        $(sel).addEventListener('input', () => {
-            const el = $(sel);
-            el.value = fmtMoneyInput(el.value);
-            renderConvertResults();
-        });
+        for (const op of ops) {
+            const idx = op.num - 1;
+            if (items[idx]) Object.assign(items[idx], op.fields);
+        }
+        renderItems();
+        scheduleSave();
+        toast(esTodo
+            ? `${ops.length} item${ops.length === 1 ? '' : 's'} convertido${ops.length === 1 ? '' : 's'}`
+            : 'Unidad convertida a ' + ops[0].fields.unit);
     });
+
     ['#conv-pieces', '#conv-largo', '#conv-ancho', '#conv-alto'].forEach(sel => {
-        $(sel).addEventListener('input', renderConvertResults);
+        $(sel).addEventListener('input', refreshConvertPreview);
     });
+    $('#conv-geometry').addEventListener('toggle', refreshConvertPreview);
     $('#convert-modal-close').addEventListener('click', closeConvertModal);
     $('#convert-modal').addEventListener('click', (e) => { if (e.target.id === 'convert-modal') closeConvertModal(); });
+    $('#btn-convert-all').addEventListener('click', () => openConvertModal({ all: true }));
 
     // Escape en la compu equivale al gesto de volver en el celular: cierra la
     // capa de arriba, sea la que sea.

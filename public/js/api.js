@@ -34,6 +34,12 @@ const API = {
     saveItems(id, items) { return this.request(`/api/budgets/${id}/items`, { method: 'PUT', body: JSON.stringify({ items }) }); },
     getPrices()        { return this.request('/api/prices'); },
     savePrices(prices) { return this.request('/api/prices', { method: 'PUT', body: JSON.stringify({ prices }) }); },
+    getUnits()         { return this.request('/api/units'); },
+    saveUnits(units)   { return this.request('/api/units', { method: 'PUT', body: JSON.stringify({ units }) }); },
+    // A qué unidades puede ir `from`, y qué medida hace falta para cada una.
+    unitPlan(from)     { return this.request('/api/units/plan', { method: 'POST', body: JSON.stringify({ from }) }); },
+    // La cuenta la hace el servidor: devuelve ops listas para confirmar.
+    convertUnits(body) { return this.request('/api/units/convert', { method: 'POST', body: JSON.stringify(body) }); },
     aiParse(text)      { return this.request('/api/ai/parse', { method: 'POST', body: JSON.stringify({ text }) }); },
     aiCommand(text, items) { return this.request('/api/ai/command', { method: 'POST', body: JSON.stringify({ text, items }) }); },
     async aiTranscribe(blob) {
