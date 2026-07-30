@@ -63,6 +63,17 @@ const API = {
     aiSuggest(query, items) { return this.request('/api/ai/suggest', { method: 'POST', body: JSON.stringify({ query, items }) }); },
     aiSpellcheck(texts)     { return this.request('/api/ai/spellcheck', { method: 'POST', body: JSON.stringify({ texts }) }); },
     aiClientData(name)      { return this.request('/api/ai/client-data', { method: 'POST', body: JSON.stringify({ name }) }); },
+    // ---- Chat del presupuesto ----
+    listChats(budgetId)   { return this.request(`/api/budgets/${budgetId}/chats`); },
+    createChat(budgetId)  { return this.request(`/api/budgets/${budgetId}/chats`, { method: 'POST', body: JSON.stringify({}) }); },
+    chatMessages(chatId)  { return this.request(`/api/chats/${chatId}/messages`); },
+    sendChatMessage(chatId, text, itemNum) {
+        return this.request(`/api/chats/${chatId}/messages`, {
+            method: 'POST',
+            body: JSON.stringify({ text, item_num: itemNum || undefined }),
+        });
+    },
+
     // ---- Visión: fotos ----
     // Mismo patrón que importFile y el audio: el archivo va como body crudo.
     async _postImage(file, ext, query) {

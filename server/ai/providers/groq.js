@@ -84,9 +84,34 @@ function parseJsonFlexible(raw) {
 // "mejor pensada" que se corta por la mitad.
 const EFFORT_TO_GROQ = { low: 'none', medium: 'none', high: 'low' };
 
+/**
+ * Reintenta cuando Groq dice "esperá y probá de nuevo".
+ *
+ * El tier gratuito tiene un techo de tokens por minuto que se llena rápido si hay
+ * dos llamadas seguidas (el chat hace eso cuando busca precios: una para pedir la
+ * búsqueda y otra para redactar con los resultados). El propio error trae cuánto
+ * hay que esperar, y casi siempre son unos segundos: vale mucho más la pena
+ * aguantar eso que devolverle "probá más tarde" a alguien que está laburando.
+ */
+async function fetchConEspera(url, opciones, intentos = 2) {
+    for (let i = 0; ; i++) {
+        const res = await fetch(url, opciones);
+        if (res.ok || i >= intentos) return res;
+
+        const detalle = await res.clone().text();
+        if (res.status !== 429) return res;
+
+        // "Please try again in 3.57s"
+        const m = detalle.match(/try again in ([\d.]+)s/i);
+        const espera = Math.min(Math.ceil((parseFloat(m?.[1]) || 3) * 1000) + 250, 12000);
+        console.warn(`[groq] cuota llena, reintento en ${Math.round(espera / 1000)}s`);
+        await new Promise(r => setTimeout(r, espera));
+    }
+}
+
 export async function complete({ system, messages, schema, expectJson = false, maxTokens = 2000, temperature = 0.2, hasImages = false, effort = 'medium' }) {
     const wantsJson = Boolean(schema) || expectJson;
-    const res = await fetch(`${API}/chat/completions`, {
+    const res = await fetchConEspera(`${API}/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({

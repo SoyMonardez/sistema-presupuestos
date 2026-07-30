@@ -8,6 +8,7 @@ import pricesRouter from './routes/prices.js';
 import unitsRouter from './routes/units.js';
 import aiRouter from './routes/ai.js';
 import importRouter from './routes/import.js';
+import chatRouter from './routes/chat.js';
 import { routingSummary } from './ai/provider.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -51,6 +52,9 @@ app.use('/api/prices', authMiddleware, pricesRouter);
 app.use('/api/units', authMiddleware, unitsRouter);
 app.use('/api/ai', authMiddleware, aiRouter);
 app.use('/api/import', authMiddleware, importRouter);
+// El chat cuelga de /api porque tiene rutas de los dos lados: las conversaciones
+// de un presupuesto (/api/budgets/:id/chats) y los mensajes (/api/chats/:id/...).
+app.use('/api', authMiddleware, chatRouter);
 
 // ---------- Frontend estático ----------
 app.use(express.static(path.join(__dirname, '..', 'public')));
