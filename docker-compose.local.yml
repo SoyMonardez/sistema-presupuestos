@@ -1,0 +1,27 @@
+# Para probar en tu compu, antes de subir nada al VPS.
+#
+#   docker compose -f docker-compose.local.yml up --build
+#   → http://localhost:3002
+#
+# El compose de siempre (docker-compose.yml) no sirve en local porque declara la
+# red externa nginx_network, que solo existe en el VPS: falla con
+# "network nginx_network declared as external, but could not be found".
+#
+# Este usa su propio volumen, así que lo que pruebes acá no se mezcla con nada.
+# Para empezar de cero:  docker compose -f docker-compose.local.yml down -v
+
+services:
+  app:
+    build: .
+    container_name: presupuestos-local
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: 3002
+    ports:
+      - "3002:3002"
+    volumes:
+      - presupuestos_data_local:/app/data
+
+volumes:
+  presupuestos_data_local:
