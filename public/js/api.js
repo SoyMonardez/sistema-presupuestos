@@ -67,11 +67,65 @@ const API = {
     listChats(budgetId)   { return this.request(`/api/budgets/${budgetId}/chats`); },
     createChat(budgetId)  { return this.request(`/api/budgets/${budgetId}/chats`, { method: 'POST', body: JSON.stringify({}) }); },
     chatMessages(chatId)  { return this.request(`/api/chats/${chatId}/messages`); },
+    deleteChat(chatId)    { return this.request(`/api/chats/${chatId}`, { method: 'DELETE' }); },
     sendChatMessage(chatId, text, itemNum) {
         return this.request(`/api/chats/${chatId}/messages`, {
             method: 'POST',
             body: JSON.stringify({ text, item_num: itemNum || undefined }),
         });
+    },
+    /**
+     * Manda el mensaje y va avisando el texto a medida que llega.
+     * EventSource no sirve acá porque solo hace GET, así que se lee el cuerpo
+     * de la respuesta a mano.
+     * @returns el mismo objeto que sendChatMessage
+     */
+    async streamChatMessage(chatId, text, itemNum, onDelta) {
+        const res = await fetch(`/api/chats/${chatId}/messages/stream`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.getToken()}` },
+            body: JSON.stringify({ text, item_num: itemNum || undefined }),
+        });
+        if (res.status === 401) {
+            this.clearToken();
+            window.dispatchEvent(new Event('auth-expired'));
+            throw new Error('Sesión vencida');
+        }
+        if (!res.ok || !res.body) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.error || `Error ${res.status}`);
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let final = null;
+        let error = null;
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+
+            // Los eventos SSE van separados por una línea en blanco.
+            const bloques = buffer.split('\n\n');
+            buffer = bloques.pop() || '';
+            for (const bloque of bloques) {
+                const evento = bloque.match(/^event:\s*(.+)$/m)?.[1]?.trim();
+                const datos = bloque.match(/^data:\s*(.+)$/m)?.[1];
+                if (!evento || !datos) continue;
+                let payload;
+                try { payload = JSON.parse(datos); } catch { continue; }
+
+                if (evento === 'delta') onDelta?.(payload.text);
+                else if (evento === 'done') final = payload;
+                else if (evento === 'error') error = payload.error;
+            }
+        }
+
+        if (error) throw new Error(error);
+        if (!final) throw new Error('La respuesta se cortó. Probá de nuevo.');
+        return final;
     },
 
     // ---- Visión: fotos ----

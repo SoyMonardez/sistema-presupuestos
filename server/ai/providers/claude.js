@@ -44,7 +44,7 @@ function extractText(content) {
         .trim();
 }
 
-export async function complete({ system, messages, schema, expectJson = false, maxTokens = 16000, effort = 'medium' }) {
+function buildRequest({ system, messages, schema, maxTokens, effort }) {
     const request = {
         model: MODEL,
         max_tokens: maxTokens,
@@ -58,6 +58,40 @@ export async function complete({ system, messages, schema, expectJson = false, m
         },
     };
     if (system) request.system = system;
+    return request;
+}
+
+export const supportsStream = true;
+
+/**
+ * Igual que complete(), pero avisando el texto a medida que llega.
+ * Solo se emiten los bloques de texto: el pensamiento no se muestra.
+ */
+export async function completeStream({ system, messages, schema, expectJson = false, maxTokens = 16000, effort = 'medium' }, onDelta) {
+    const stream = getClient().messages.stream(buildRequest({ system, messages, schema, maxTokens, effort }));
+
+    let completo = '';
+    stream.on('text', (fragmento) => {
+        completo += fragmento;
+        onDelta?.(fragmento);
+    });
+
+    const final = await stream.finalMessage();
+    if (final.stop_reason === 'refusal') {
+        throw new Error('La IA rechazó el pedido por sus filtros de seguridad. Reformulalo.');
+    }
+    if (!completo.trim()) throw new Error('Respuesta vacía de Claude');
+
+    if (!schema && !expectJson) return { text: completo.trim() };
+    try {
+        return JSON.parse(stripCodeFence(completo.trim()));
+    } catch {
+        throw new Error('Claude devolvió un JSON inválido');
+    }
+}
+
+export async function complete({ system, messages, schema, expectJson = false, maxTokens = 16000, effort = 'medium' }) {
+    const request = buildRequest({ system, messages, schema, maxTokens, effort });
 
     const response = await getClient().messages.create(request);
 

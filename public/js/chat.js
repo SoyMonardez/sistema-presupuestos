@@ -45,6 +45,106 @@ const Chat = (() => {
         document.querySelectorAll('.chat-chip').forEach(chip => {
             chip.addEventListener('click', () => enviar(chip.textContent));
         });
+
+        $('#chat-new').addEventListener('click', nuevaConversacion);
+        $('#chat-history').addEventListener('click', abrirListaChats);
+        $('#chats-modal-close').addEventListener('click', () => Nav.popLayer());
+        $('#chats-modal').addEventListener('click', (e) => { if (e.target.id === 'chats-modal') Nav.popLayer(); });
+    }
+
+    function limpiarPantalla(titulo = 'Asistente') {
+        chatId = null;
+        opsPendientes = null;
+        itemFoco = null;
+        $('#chat-messages').innerHTML = '';
+        $('#chat-empty').hidden = false;
+        $('#chat-title').textContent = titulo;
+        $('#chat-input').value = '';
+        $('#chat-input').placeholder = 'Escribile al asistente…';
+        autoGrow();
+    }
+
+    function nuevaConversacion() {
+        limpiarPantalla();
+        $('#chat-input').focus();
+    }
+
+    async function abrirListaChats() {
+        const budgetId = cfg.getBudgetId();
+        if (!budgetId) return;
+
+        const lista = $('#chats-list');
+        lista.innerHTML = '<p class="field-hint">Cargando…</p>';
+        $('#chats-modal').hidden = false;
+        document.body.classList.add('modal-open');
+        Nav.pushLayer('chats-modal', () => {
+            $('#chats-modal').hidden = true;
+            document.body.classList.remove('modal-open');
+        });
+
+        try {
+            const { chats } = await API.listChats(budgetId);
+            lista.innerHTML = '';
+            if (!chats.length) {
+                lista.innerHTML = '<p class="field-hint">Todavía no hablaste con el asistente sobre este presupuesto.</p>';
+                return;
+            }
+            for (const c of chats) {
+                const fila = document.createElement('div');
+                fila.className = 'chat-row' + (c.id === chatId ? ' active' : '');
+                fila.innerHTML = `
+                    <button type="button" class="chat-row-open">
+                        <span class="chat-row-title"></span>
+                        <span class="chat-row-date"></span>
+                    </button>
+                    <button type="button" class="chat-row-del" aria-label="Borrar conversación">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="17" height="17"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>`;
+                fila.querySelector('.chat-row-title').textContent = c.title || 'Sin título';
+                fila.querySelector('.chat-row-date').textContent = formatDate(c.updated_at);
+                fila.querySelector('.chat-row-open').addEventListener('click', () => {
+                    Nav.popLayer();
+                    cargarConversacion(c.id, c.title);
+                });
+                fila.querySelector('.chat-row-del').addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    try {
+                        await API.deleteChat(c.id);
+                        if (c.id === chatId) limpiarPantalla();
+                        fila.remove();
+                        if (!lista.querySelector('.chat-row')) {
+                            lista.innerHTML = '<p class="field-hint">No quedan conversaciones.</p>';
+                        }
+                    } catch (err) { cfg.toast(err.message, true); }
+                });
+                lista.appendChild(fila);
+            }
+        } catch (err) {
+            lista.innerHTML = '';
+            const p = document.createElement('p');
+            p.className = 'field-hint';
+            p.textContent = err.message;
+            lista.appendChild(p);
+        }
+    }
+
+    async function cargarConversacion(id, titulo) {
+        limpiarPantalla(titulo || 'Asistente');
+        chatId = id;
+        try {
+            const { messages } = await API.chatMessages(id);
+            if (messages.length) {
+                $('#chat-empty').hidden = true;
+                messages.forEach(m => pintar(m.role, m.content, m.data, { scroll: false }));
+                // Lo que ya se aplicó o descartó no puede volver a aplicarse desde
+                // el historial; al recargar no sabemos qué pasó, así que se sella todo.
+                marcarTarjetasResueltas('Ya resuelto');
+                opsPendientes = null;
+                scrollAbajo();
+            }
+        } catch (err) {
+            cfg.toast(err.message, true);
+        }
     }
 
     function autoGrow() {
@@ -53,30 +153,14 @@ const Chat = (() => {
         el.style.height = Math.min(el.scrollHeight, 140) + 'px';
     }
 
-    /** Se llama al abrir un presupuesto: limpia y engancha la conversación. */
+    /** Se llama al abrir un presupuesto: retoma la última conversación, si hay. */
     async function open() {
-        chatId = null;
-        opsPendientes = null;
-        itemFoco = null;
-        $('#chat-messages').innerHTML = '';
-        $('#chat-empty').hidden = false;
-        $('#chat-input').value = '';
-        autoGrow();
-
+        limpiarPantalla();
         const budgetId = cfg.getBudgetId();
         if (!budgetId) return;
         try {
-            // Se retoma la última conversación de este presupuesto, si hay.
             const { chats } = await API.listChats(budgetId);
-            if (chats.length) {
-                chatId = chats[0].id;
-                const { messages } = await API.chatMessages(chatId);
-                if (messages.length) {
-                    $('#chat-empty').hidden = true;
-                    messages.forEach(m => pintar(m.role, m.content, m.data, { scroll: false }));
-                    scrollAbajo();
-                }
-            }
+            if (chats.length) await cargarConversacion(chats[0].id, chats[0].title);
         } catch {
             // Sin historial se arranca de cero; no vale la pena molestarlo con esto.
         }
@@ -130,11 +214,42 @@ const Chat = (() => {
                 const chat = await API.createChat(cfg.getBudgetId());
                 chatId = chat.id;
             }
-            const { message } = await API.sendChatMessage(chatId, texto, itemFoco);
+
+            // Burbuja que se va llenando con lo que escribe el modelo. Aparece
+            // recién con el primer pedazo de texto, así los puntitos se ven
+            // mientras piensa y no queda una burbuja vacía en el medio.
+            let burbuja = null;
+            let acumulado = '';
+            const onDelta = (trozo) => {
+                if (!trozo) return;
+                if (!burbuja) {
+                    pensando.remove();
+                    burbuja = pintar('assistant', '').querySelector('.chat-bubble');
+                }
+                acumulado += trozo;
+                burbuja.textContent = acumulado;
+                scrollAbajo();
+            };
+
+            const out = await API.streamChatMessage(chatId, texto, itemFoco, onDelta);
             itemFoco = null;
             $('#chat-input').placeholder = 'Escribile al asistente…';
             pensando.remove();
-            pintar('assistant', message.content, message.data);
+            if (out.title) $('#chat-title').textContent = out.title;
+
+            const { message } = out;
+            if (burbuja && !out.replaced) {
+                // Ya está casi todo en pantalla: se completa el texto final y se
+                // le cuelgan las tarjetas, sin volver a dibujar el mensaje.
+                burbuja.textContent = message.content;
+                completar(burbuja.closest('.chat-msg'), message.data);
+            } else {
+                // No hubo streaming (o la respuesta se rehízo tras buscar en
+                // internet, y lo que se mostró quedó viejo): se pinta de nuevo.
+                burbuja?.closest('.chat-msg')?.remove();
+                pintar('assistant', message.content, message.data);
+            }
+            scrollAbajo();
         } catch (err) {
             pensando.remove();
             pintar('assistant', err.message || 'No pude responder, probá de nuevo.');
@@ -163,10 +278,21 @@ const Chat = (() => {
         burbuja.textContent = texto;
         wrap.appendChild(burbuja);
 
-        if (data?.simulation) wrap.appendChild(tarjetaSimulacion(data.simulation, data.ops));
-        else if (data?.ops?.length) wrap.appendChild(tarjetaCambios(data.ops));
+        completar(wrap, data);
 
-        if (data?.warnings?.length) {
+        $('#chat-messages').appendChild(wrap);
+        if (scroll) scrollAbajo();
+        return wrap;
+    }
+
+    /** Cuelga las tarjetas (simulación, cambios, avisos, fuentes) de un mensaje. */
+    function completar(wrap, data) {
+        if (!wrap || !data) return;
+
+        if (data.simulation) wrap.appendChild(tarjetaSimulacion(data.simulation, data.ops));
+        else if (data.ops?.length) wrap.appendChild(tarjetaCambios(data.ops));
+
+        if (data.warnings?.length) {
             const av = document.createElement('div');
             av.className = 'chat-warns';
             data.warnings.slice(0, 4).forEach(w => {
@@ -176,12 +302,8 @@ const Chat = (() => {
             });
             wrap.appendChild(av);
         }
-        if (data?.sources?.length) wrap.appendChild(fuentes(data.sources));
-
-        $('#chat-messages').appendChild(wrap);
-        if (data?.ops?.length) opsPendientes = data.ops;
-        if (scroll) scrollAbajo();
-        return wrap;
+        if (data.sources?.length) wrap.appendChild(fuentes(data.sources));
+        if (data.ops?.length) opsPendientes = data.ops;
     }
 
     // La tarjeta de simulación: números reales, y nada aplicado todavía.
