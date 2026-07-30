@@ -1056,11 +1056,16 @@
                 <span class="draft-item-detail">${d.detail}</span>`;
             listEl.appendChild(row);
         }
+        // Una hoja puede leerse bien y no proponer ningún cambio aplicable (todo
+        // fue a "no encontré a qué item corresponde"). Ahí el resumen importa,
+        // pero ofrecer "Aplicar" no tendría sentido.
+        $('#btn-draft-add').hidden = !ops.length;
         $('#draft-panel').hidden = false;
     }
 
     function hideDraft() {
         $('#draft-panel').hidden = true;
+        $('#btn-draft-add').hidden = false;
         draftOps = [];
     }
 
@@ -1123,16 +1128,56 @@
     });
 
     // ================= Importar archivo (PDF / Excel / CSV) =================
-    $('#btn-import').addEventListener('click', () => $('#import-file').click());
+    const EXT_ARCHIVO = ['pdf', 'xlsx', 'csv'];
+    const EXT_FOTO    = ['jpg', 'jpeg', 'png', 'webp', 'heic', 'heif'];
+
+    $('#btn-import').addEventListener('click', () => {
+        // Con items cargados, una foto puede ser dos cosas muy distintas: una
+        // lista para importar, o la hoja de cambios que le devolvió el municipio.
+        // Preguntarlo es más barato que adivinar mal.
+        if (items.length) { openImportChoice(); return; }
+        pedirArchivo('import');
+    });
+
+    let importMode = 'import';
+    function pedirArchivo(mode) {
+        importMode = mode;
+        const input = $('#import-file');
+        input.accept = mode === 'changes'
+            ? 'image/*'
+            : '.pdf,.xlsx,.csv,image/*';
+        input.click();
+    }
+
+    function openImportChoice() {
+        $('#import-choice').hidden = false;
+        document.body.classList.add('modal-open');
+        Nav.pushLayer('import-choice', () => {
+            $('#import-choice').hidden = true;
+            document.body.classList.remove('modal-open');
+        });
+    }
+    $('#import-choice-close').addEventListener('click', () => Nav.popLayer());
+    $('#import-choice').addEventListener('click', (e) => { if (e.target.id === 'import-choice') Nav.popLayer(); });
+    $('#choice-changes').addEventListener('click', () => { Nav.popLayer(); pedirArchivo('changes'); });
+    $('#choice-import').addEventListener('click',  () => { Nav.popLayer(); pedirArchivo('import'); });
+
     $('#import-file').addEventListener('change', async (e) => {
         const file = e.target.files[0];
         e.target.value = '';   // permite re-subir el mismo archivo
         if (!file) return;
         const ext = (file.name.split('.').pop() || '').toLowerCase();
-        if (!['pdf', 'xlsx', 'csv'].includes(ext)) {
-            toast('Subí un PDF, Excel (.xlsx) o CSV', true);
+        const esFoto = EXT_FOTO.includes(ext);
+
+        if (!esFoto && !EXT_ARCHIVO.includes(ext)) {
+            toast('Subí una foto, un PDF, un Excel (.xlsx) o un CSV', true);
             return;
         }
+        if (importMode === 'changes' && !esFoto) {
+            toast('La hoja de cambios tiene que ser una foto', true);
+            return;
+        }
+
         const btn = $('#btn-import');
         const lbl = $('#import-label');
         const prev = lbl.textContent;
@@ -1141,12 +1186,28 @@
         hideAIPanel();
         hideDraft();
         try {
-            const { items: parsed } = await API.importFile(file, ext);
-            if (!parsed.length) {
-                toast('No encontré items en ese archivo', true);
+            if (importMode === 'changes') {
+                // Las ops vienen numeradas contra lo que está GUARDADO, así que
+                // hay que asegurarse de que no quede nada pendiente de guardar.
+                await flushSave();
+                const { ops, summary } = await API.readChangeSheet(file, ext, currentBudget.id);
+                if (!ops.length) {
+                    toast(summary || 'No encontré cambios en esa hoja', true);
+                    if (summary) showOps([], summary);
+                } else {
+                    showOps(ops, summary);
+                    toast(`${ops.length} cambio${ops.length === 1 ? '' : 's'} propuesto${ops.length === 1 ? '' : 's'}`);
+                }
             } else {
-                showOps(itemsToAddOps(parsed), '');
-                toast(`${parsed.length} item${parsed.length === 1 ? '' : 's'} detectado${parsed.length === 1 ? '' : 's'}`);
+                const { items: parsed } = esFoto
+                    ? await API.readPhotoItems(file, ext)
+                    : await API.importFile(file, ext);
+                if (!parsed.length) {
+                    toast('No encontré items en ese archivo', true);
+                } else {
+                    showOps(itemsToAddOps(parsed), '');
+                    toast(`${parsed.length} item${parsed.length === 1 ? '' : 's'} detectado${parsed.length === 1 ? '' : 's'}`);
+                }
             }
         } catch (err) {
             toast(err.message, true);

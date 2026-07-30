@@ -32,7 +32,13 @@ const TASK_DEFAULTS = {
     client_data: { maxTokens: 300,  temperature: 0,    effort: 'low' },
     command:     { maxTokens: 8000, temperature: 0.15, effort: 'medium' },
     chat:        { maxTokens: 8000, temperature: 0.3,  effort: 'medium' },
-    vision:      { maxTokens: 8000, temperature: 0.1,  effort: 'medium' },
+    // Ojo con maxTokens acá: Groq lo suma al presupuesto de tokens por minuto
+    // ANTES de correr nada, así que pedir 8000 de salida hacía rebotar cualquier
+    // foto por límite de cuota aunque la imagen fuera chica. Pero tampoco puede
+    // ser muy bajo: los modelos que razonan gastan tokens pensando y, si se
+    // quedan sin margen, devuelven vacío. 4000 es el punto que deja leer una
+    // hoja entera y sigue entrando en el tier gratuito.
+    vision:      { maxTokens: 4000, temperature: 0.1,  effort: 'medium' },
 };
 
 const warned = new Set();

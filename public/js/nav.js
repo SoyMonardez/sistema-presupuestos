@@ -53,6 +53,88 @@ const Nav = (() => {
         // gesto sale de la app, que es lo que corresponde.
     });
 
+    // ======================= Arrastrar la hoja para cerrar =======================
+    // El gesto que se espera de una hoja inferior: se agarra y se tira para abajo.
+    // Se engancha una sola vez sobre el documento (delegación), así vale para las
+    // modales que ya existen y para las que se agreguen después.
+    //
+    // Solo arranca desde el encabezado o el tirador: si arrancara desde el cuerpo,
+    // pelearía con el scroll interno de la lista de unidades. La excepción es
+    // cuando el cuerpo ya está arriba de todo (scrollTop 0) y el gesto va hacia
+    // abajo, que es como se comportan las apps nativas.
+
+    const CIERRE_MINIMO = 90;      // px que hay que arrastrar para que cierre
+    const VELOCIDAD_FLICK = 0.5;   // px/ms: un tirón corto pero rápido también cierra
+
+    let hoja = null;               // .modal-box que se está arrastrando
+    let inicioY = 0, inicioT = 0, desplazado = 0, arrastrando = false;
+
+    function puedeArrastrar(target, box) {
+        if (target.closest('.modal-close, button, input, textarea, select, a')) return false;
+        if (target.closest('.modal-head, .sheet-grip')) return true;
+        // Desde el cuerpo solo si no hay nada scrolleado arriba.
+        const body = target.closest('.modal-body');
+        return body ? body.scrollTop <= 0 : false;
+    }
+
+    document.addEventListener('touchstart', (e) => {
+        if (e.touches.length !== 1) return;
+        const box = e.target.closest('.modal-box');
+        if (!box || !puedeArrastrar(e.target, box)) return;
+        hoja = box;
+        inicioY = e.touches[0].clientY;
+        inicioT = Date.now();
+        desplazado = 0;
+        arrastrando = true;
+        hoja.style.transition = 'none';
+    }, { passive: true });
+
+    document.addEventListener('touchmove', (e) => {
+        if (!arrastrando || !hoja || e.touches.length !== 1) return;
+        const dy = e.touches[0].clientY - inicioY;
+        if (dy <= 0) {              // tirar para arriba no hace nada
+            desplazado = 0;
+            hoja.style.transform = '';
+            return;
+        }
+        desplazado = dy;
+        e.preventDefault();          // el gesto es nuestro: que no scrollee la página
+        hoja.style.transform = `translateY(${dy}px)`;
+        const overlay = hoja.parentElement;
+        if (overlay) overlay.style.background = `rgba(0,0,0,${Math.max(.15, .6 - dy / 700)})`;
+    }, { passive: false });
+
+    function soltarHoja() {
+        if (!arrastrando || !hoja) return;
+        arrastrando = false;
+        const box = hoja;
+        const overlay = box.parentElement;
+        const velocidad = desplazado / Math.max(Date.now() - inicioT, 1);
+        const cierra = desplazado > CIERRE_MINIMO || (velocidad > VELOCIDAD_FLICK && desplazado > 30);
+
+        box.style.transition = 'transform .22s ease';
+        if (overlay) overlay.style.background = '';
+
+        if (cierra) {
+            box.style.transform = `translateY(${box.offsetHeight}px)`;
+            // Se cierra por el mismo camino que el botón X y el gesto del celular,
+            // para que el historial no se desincronice.
+            setTimeout(() => {
+                box.style.transition = '';
+                box.style.transform = '';
+                popLayer();
+            }, 180);
+        } else {
+            box.style.transform = '';               // vuelve a su lugar
+            setTimeout(() => { box.style.transition = ''; }, 240);
+        }
+        hoja = null;
+        desplazado = 0;
+    }
+
+    document.addEventListener('touchend', soltarHoja, { passive: true });
+    document.addEventListener('touchcancel', soltarHoja, { passive: true });
+
     // ======================= Pestañas con gesto =======================
     // Las pestañas NO empujan historial a propósito: en las apps con barra
     // inferior, el gesto de volver sale de la pantalla, no recorre las pestañas.

@@ -551,6 +551,27 @@ body {
 .ic-detail-toggle.active, .ic-detail-toggle:hover,
 .ic-convert-toggle:hover { color: var(--primary); border-color: var(--primary); }
 
+/* ============ Elección de qué se sube ============ */
+.choice-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 5px;
+    width: 100%;
+    text-align: left;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 15px;
+    cursor: pointer;
+    font-family: inherit;
+    -webkit-tap-highlight-color: transparent;
+}
+.choice-card + .choice-card { margin-top: 10px; }
+.choice-card:hover { border-color: var(--primary); }
+.choice-card-title { font-size: 15.5px; font-weight: 700; color: var(--text); }
+.choice-card-desc  { font-size: 13px; color: var(--text-dim); line-height: 1.45; }
+
 /* ============ Selector de unidad ============ */
 .unit-list {
     display: grid;
@@ -850,17 +871,42 @@ body.modal-open { overflow: hidden; }
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 20px 20px 0 0;
-    padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
+    padding: 8px 16px calc(18px + env(safe-area-inset-bottom));
     display: flex;
     flex-direction: column;
     gap: 14px;
     animation: modalUp .22s ease;
+    touch-action: pan-y;
 }
 @keyframes modalUp { from { transform: translateY(40px); } to { transform: translateY(0); } }
 @media (min-width: 600px) {
     .modal-overlay { align-items: center; }
-    .modal-box { border-radius: 20px; max-height: 88dvh; }
+    .modal-box { border-radius: 20px; max-height: 88dvh; padding-top: 14px; }
+    /* En pantalla grande no hay gesto: el tirador solo confunde. */
+    .sheet-grip { display: none; }
 }
+
+/* Tirador de la hoja: la señal visual de que se puede arrastrar para cerrar.
+   El área táctil es más alta que la barrita, para agarrarla sin apuntar. */
+.sheet-grip {
+    flex: 0 0 auto;
+    align-self: center;
+    width: 100%;
+    padding: 6px 0 2px;
+    display: flex;
+    justify-content: center;
+    cursor: grab;
+    -webkit-tap-highlight-color: transparent;
+}
+.sheet-grip::before {
+    content: '';
+    width: 42px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--border);
+}
+.sheet-grip:active { cursor: grabbing; }
+
 .modal-head { display: flex; align-items: center; justify-content: space-between; }
 .modal-head h3 { font-size: 19px; }
 .modal-close {
@@ -1117,11 +1163,17 @@ body.modal-open { overflow: hidden; }
 
    La hoja pasa a tener altura fija y el que scrollea es el cuerpo. Así el
    textarea puede crecer todo lo que quiera sin mover ni un pixel de lo demás. */
+   Ojo: la altura fija hace falta SOLO donde hay un textarea que crece (la hoja de
+   descripción). En las demás dejaría un vacío enorme abajo, así que se pide con
+   la clase .modal-tall y el resto se ajusta a su contenido. */
 @media (max-width: 599px) {
     .modal-box {
+        max-height: 88dvh;
+        overflow: hidden;          /* scrollea .modal-body, no la hoja entera */
+    }
+    .modal-box.modal-tall {
         height: 88dvh;
         max-height: none;
-        overflow: hidden;          /* scrollea .modal-body, no la hoja entera */
     }
     .modal-body {
         flex: 1 1 auto;
@@ -1130,5 +1182,5 @@ body.modal-open { overflow: hidden; }
         overscroll-behavior: contain;
         padding-right: 2px;        /* aire para la barra de scroll */
     }
-    .modal-head, .modal-done { flex: 0 0 auto; }
+    .modal-head, .modal-done, .sheet-grip { flex: 0 0 auto; }
 }
