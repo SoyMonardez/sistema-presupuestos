@@ -9,6 +9,7 @@ import unitsRouter from './routes/units.js';
 import aiRouter from './routes/ai.js';
 import importRouter from './routes/import.js';
 import chatRouter from './routes/chat.js';
+import settingsRouter from './routes/settings.js';
 import { routingSummary } from './ai/provider.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -50,6 +51,7 @@ app.post('/api/login', (req, res) => {
 app.use('/api/budgets', authMiddleware, budgetsRouter);
 app.use('/api/prices', authMiddleware, pricesRouter);
 app.use('/api/units', authMiddleware, unitsRouter);
+app.use('/api/settings', authMiddleware, settingsRouter);
 app.use('/api/ai', authMiddleware, aiRouter);
 app.use('/api/import', authMiddleware, importRouter);
 // El chat cuelga de /api porque tiene rutas de los dos lados: las conversaciones

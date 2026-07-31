@@ -23,6 +23,8 @@ import { partialString } from '../lib/partial-json.js';
 import { conReintentoDeTamaño } from '../lib/images.js';
 import { priceRefsPromptBlock } from './prices.js';
 import { unitsPromptBlock } from './units.js';
+import { loadSettings } from './settings.js';
+import { markupPromptBlock } from '../lib/markup.js';
 
 const router = Router();
 
@@ -57,6 +59,9 @@ CUÁNDO USAR CADA UNO
    {"action":"remove","num":3}
    {"action":"add","item":{"name":"...","detail":"...","quantity":N,"unit":"...","unit_price":N}}
    En las conversiones vos solo indicás la unidad y la medida que sepas; la cuenta la hace el sistema.
+   Si el precio que ponés es una estimación tuya (material + mano de obra) y no salió
+   del tarifario, agregale "es_costo_directo": true al item y el sistema le aplica
+   el margen y los impuestos de la empresa. Ver la estructura de costos más abajo.
 
    ==================== LO MÁS IMPORTANTE DE TODO ====================
    PROPONER ES MANDAR LAS "ops". No existe proponer con palabras.
@@ -92,9 +97,25 @@ Puede ser tres cosas, fijate cuál:
 - EL LUGAR DE LA OBRA (una pared, un terreno, un techo): describí lo que ves y, si te da datos para estimar, proponé los items con "ops". Aclarale siempre que es una estimación a ojo desde una foto.
 Si un número está borroso o cortado, NO lo adivines: decilo en "reply".
 
+LAS MEDIDAS SE CALCULAN, NO SE REDONDEAN A OJO
+Una pared de 9 m de largo por 1.10 m de alto son 9.9 m². Ni 10 ni 10.89: 9.9.
+Hacé la cuenta y poné ESE número en "quantity".
+
+Si a un MATERIAL le querés sumar desperdicio (recortes, roturas), podés hacerlo,
+pero tiene que estar a la vista: la cuenta va escrita en el "detail" del item.
+   BIEN: quantity 10.89, detail "Superficie: 9.00 m x 1.10 m = 9.9 m²\\n+10% de desperdicio = 10.89 m²"
+   MAL:  quantity 10.89 sin decir de dónde salió (él mide 9.9 en la obra, no le
+         cierra, y no sabe si le estás cobrando de más)
+A la MANO DE OBRA no se le suma desperdicio: se pagan las horas del trabajo real,
+no los recortes del material.
+
+Él le muestra este presupuesto al cliente y se lo discuten con el metro en la
+mano. Cada número tiene que poder explicarse.
+
 REGLAS QUE NO SE ROMPEN
 - Nunca inventes un precio del tarifario. Si no está, decilo y ofrecé buscarlo.
 - Si te pregunta cuánto cobrar por algo, mirá primero su tarifario y su histórico. Si no hay nada parecido, decí que es una estimación tuya.
+- Un presupuesto tiene que dejarle ganancia. Si lo que armaste es solo material y mano de obra, ESTÁS PRESUPUESTANDO A COSTO: marcá esos items con "es_costo_directo": true y dejá que el sistema le aplique gastos generales, utilidad e impuestos.
 - Nunca cambies nada sin que él confirme.
 - Para conversiones y descuentos NO calcules vos: usá "simulate" u "ops" y dejá que el sistema haga la aritmética.
 - Si te pide algo que no tiene que ver con presupuestos, contestá igual pero corto.`;
@@ -232,6 +253,7 @@ const MAX_HISTORIAL = 14;   // mensajes previos que se le mandan al modelo
 async function responder(chat, texto, itemNum, onDelta, imagen) {
     const items = itemsStmt.all(chat.budget_id);
     const catalog = loadUnitCatalog();
+    const markup = loadSettings();
 
     const previos = db.prepare(
         'SELECT role, content FROM chat_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?'
@@ -246,6 +268,7 @@ async function responder(chat, texto, itemNum, onDelta, imagen) {
     const system = CHAT_SYSTEM
         + unitsPromptBlock()
         + priceRefsPromptBlock()
+        + markupPromptBlock(markup)
         + historicoPromptBlock(chat.budget_id, texto);
 
     const mensajes = [
@@ -389,7 +412,7 @@ async function responder(chat, texto, itemNum, onDelta, imagen) {
 
     // Cambios pedidos directamente.
     if (Array.isArray(respuesta.ops) && respuesta.ops.length) {
-        const { ops, warnings } = normalizeOps(respuesta.ops, items, catalog, 200);
+        const { ops, warnings } = normalizeOps(respuesta.ops, items, catalog, 200, markup);
         adjunto.ops = ops;
         if (warnings.length) adjunto.warnings = warnings;
     }

@@ -551,6 +551,52 @@ body {
 .ic-detail-toggle.active, .ic-detail-toggle:hover,
 .ic-convert-toggle:hover { color: var(--primary); border-color: var(--primary); }
 
+/* ============ Margen e impuestos (en Precios base) ============ */
+.markup-box { margin: 0 16px 6px; }
+.markup-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 9px;
+}
+.check-row {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 14px;
+    color: var(--text);
+    cursor: pointer;
+    padding: 4px 0;
+}
+.check-row input { width: 19px; height: 19px; accent-color: var(--primary); flex: 0 0 auto; }
+
+.markup-ejemplo {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px;
+    font-size: 13px;
+}
+.markup-ejemplo-titulo {
+    font-size: 12px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: .03em;
+    margin-bottom: 3px;
+}
+.markup-row { display: flex; justify-content: space-between; gap: 12px; color: var(--text-dim); }
+.markup-row span:last-child { color: var(--text); white-space: nowrap; }
+.markup-row-total {
+    border-top: 1px solid var(--border);
+    padding-top: 6px;
+    margin-top: 3px;
+    font-weight: 700;
+}
+.markup-row-total span { color: var(--text) !important; }
+.markup-row-total span:last-child { color: var(--primary) !important; }
+
 /* ============ Elección de qué se sube ============ */
 .choice-card {
     display: flex;
@@ -1288,6 +1334,38 @@ body.modal-open { overflow: hidden; }
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+
+/* ===================================================================
+   Barras de scroll que aparecen solo mientras se scrollea
+   ===================================================================
+   La barra fija a un costado se ve mal y encima come ancho. Acá queda
+   flotando encima del contenido y solo se ve mientras se está moviendo:
+   una clase la enciende al scrollear y se apaga sola (ver nav.js).
+
+   Firefox no tiene ::-webkit-scrollbar, así que usa scrollbar-width/color;
+   no puede desvanecerse, pero al menos queda finita y discreta. */
+.scroll-suave {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color .3s ease;
+}
+.scroll-suave.scrolleando { scrollbar-color: var(--border) transparent; }
+
+.scroll-suave::-webkit-scrollbar {
+    width: 7px;
+    height: 7px;
+}
+.scroll-suave::-webkit-scrollbar-track { background: transparent; }
+.scroll-suave::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 99px;
+    /* Achica el pulgar sin animar el ancho de la barra, que no se puede animar */
+    border: 2px solid transparent;
+    background-clip: content-box;
+    transition: background-color .35s ease;
+}
+.scroll-suave.scrolleando::-webkit-scrollbar-thumb { background-color: var(--border); }
+.scroll-suave.scrolleando:hover::-webkit-scrollbar-thumb { background-color: var(--text-dim); }
 
 /* Zona de soltar, mientras se arrastra una foto encima del chat */
 .chat-drop {

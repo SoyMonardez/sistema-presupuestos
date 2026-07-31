@@ -34,6 +34,8 @@ const API = {
     saveItems(id, items) { return this.request(`/api/budgets/${id}/items`, { method: 'PUT', body: JSON.stringify({ items }) }); },
     getPrices()        { return this.request('/api/prices'); },
     savePrices(prices) { return this.request('/api/prices', { method: 'PUT', body: JSON.stringify({ prices }) }); },
+    getSettings()      { return this.request('/api/settings'); },
+    saveSettings(body) { return this.request('/api/settings', { method: 'PUT', body: JSON.stringify(body) }); },
     getUnits()         { return this.request('/api/units'); },
     saveUnits(units)   { return this.request('/api/units', { method: 'PUT', body: JSON.stringify({ units }) }); },
     // A qué unidades puede ir `from`, y qué medida hace falta para cada una.

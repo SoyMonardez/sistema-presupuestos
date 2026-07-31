@@ -15,16 +15,27 @@
 // termina traducida a operaciones 'update' con la cuenta ya hecha por units.js.
 
 import { conversionPlan, convertItem, canonicalLabel, DEFAULT_UNITS } from './units.js';
+import { aVenta, DEFAULTS as MARKUP_DEFAULTS } from './markup.js';
 
 const clampMoney = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
-function normalizeItem(raw, catalog) {
+function normalizeItem(raw, catalog, markup) {
+    // Cuando la IA estima un precio, lo que estima es el costo directo: material
+    // más mano de obra. El precio de venta sale de aplicarle el coeficiente de la
+    // empresa (gastos generales, utilidad, impuestos), y esa cuenta la hace acá,
+    // no el modelo. Los precios que vienen del tarifario ya son de venta y pasan
+    // sin tocar.
+    const precio = Number(raw?.unit_price) || 0;
+    const esCosto = raw?.es_costo_directo === true || raw?.costo_directo === true;
+
     return {
         name:       String(raw?.name || '').slice(0, 200) || 'Item',
         detail:     String(raw?.detail || '').slice(0, 1000),
         quantity:   Number(raw?.quantity) || 1,
         unit:       canonicalLabel(raw?.unit || 'un.', catalog),
-        unit_price: Number(raw?.unit_price) || 0,
+        unit_price: esCosto ? aVenta(precio, markup || MARKUP_DEFAULTS) : clampMoney(precio),
+        // Se guarda para poder mostrarle de dónde salió el número.
+        ...(esCosto ? { _costo_directo: clampMoney(precio) } : {}),
     };
 }
 
@@ -100,12 +111,12 @@ function resolveConvert(op, items, catalog) {
  * Valida una operación cruda de la IA. Devuelve { ops, warnings } porque una sola
  * operación de conversión puede expandirse en varias.
  */
-export function normalizeOp(rawOp, items, catalog = DEFAULT_UNITS) {
+export function normalizeOp(rawOp, items, catalog = DEFAULT_UNITS, markup = MARKUP_DEFAULTS) {
     const action = String(rawOp?.action || '').toLowerCase();
     const itemCount = items.length;
 
     if (action === 'add') {
-        return { ops: [{ action: 'add', item: normalizeItem(rawOp.item, catalog) }], warnings: [] };
+        return { ops: [{ action: 'add', item: normalizeItem(rawOp.item, catalog, markup) }], warnings: [] };
     }
 
     if (action === 'convert') {
@@ -143,13 +154,13 @@ export function normalizeOp(rawOp, items, catalog = DEFAULT_UNITS) {
  * `maxOps` acota lo que puede pedir un solo mensaje; convertir todo un presupuesto
  * grande es legítimo, así que el tope es generoso.
  */
-export function normalizeOps(rawOps, items, catalog = DEFAULT_UNITS, maxOps = 200) {
+export function normalizeOps(rawOps, items, catalog = DEFAULT_UNITS, maxOps = 200, markup = MARKUP_DEFAULTS) {
     const source = Array.isArray(rawOps) ? rawOps.slice(0, 60) : [];
     const ops = [];
     const warnings = [];
 
     for (const rawOp of source) {
-        const result = normalizeOp(rawOp, items, catalog);
+        const result = normalizeOp(rawOp, items, catalog, markup);
         ops.push(...result.ops);
         warnings.push(...result.warnings);
         if (ops.length >= maxOps) break;

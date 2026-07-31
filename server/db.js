@@ -57,6 +57,24 @@ CREATE TABLE IF NOT EXISTS units (
     position  INTEGER NOT NULL DEFAULT 0
 );
 
+-- Parámetros del negocio. Una sola fila (id = 1).
+--
+-- Sin esto la IA estimaba "precio de mercado" y devolvía el COSTO DIRECTO
+-- (material + mano de obra) como si fuera el precio de venta. Para un tipo solo
+-- puede pasar; para una empresa que paga proveedores, sueldos e impuestos,
+-- presupuestar a costo es trabajar gratis o perder plata.
+CREATE TABLE IF NOT EXISTS business_settings (
+    id             INTEGER PRIMARY KEY CHECK (id = 1),
+    gastos_pct     REAL NOT NULL DEFAULT 15,   -- gastos generales: obrador, flete, herramienta, seguros
+    utilidad_pct   REAL NOT NULL DEFAULT 15,   -- lo que gana la empresa
+    iibb_pct       REAL NOT NULL DEFAULT 3,    -- ingresos brutos (se calcula sobre la venta)
+    iva_pct        REAL NOT NULL DEFAULT 21,
+    aplica_iva     INTEGER NOT NULL DEFAULT 0, -- 0 = los precios se muestran sin IVA
+    updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+INSERT OR IGNORE INTO business_settings (id) VALUES (1);
+
 -- Chat por presupuesto, con varias conversaciones (estilo ChatGPT).
 CREATE TABLE IF NOT EXISTS chat_conversations (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,

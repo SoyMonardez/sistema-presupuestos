@@ -8,6 +8,8 @@ import { conReintentoDeTamaño } from '../lib/images.js';
 import db, { loadUnitCatalog } from '../db.js';
 import { priceRefsPromptBlock } from './prices.js';
 import { unitsPromptBlock } from './units.js';
+import { loadSettings } from './settings.js';
+import { markupPromptBlock } from '../lib/markup.js';
 
 const router = Router();
 
@@ -404,7 +406,7 @@ router.post('/vision', rawImage, async (req, res) => {
             expectJson: true,
         }));
 
-        const { ops, warnings } = normalizeOps(result.ops, current, catalog, 200);
+        const { ops, warnings } = normalizeOps(result.ops, current, catalog, 200, loadSettings());
 
         const sinMatch = (Array.isArray(result.sin_match) ? result.sin_match : [])
             .slice(0, 10).map(s => String(s).slice(0, 200)).filter(Boolean);
