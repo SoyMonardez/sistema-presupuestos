@@ -35,6 +35,11 @@ router.put('/', (req, res) => {
 
 export default router;
 
+/** El tarifario crudo, para comparar contra él sin pasar por el prompt. */
+export function listarPreciosRef() {
+    return listStmt.all();
+}
+
 // Bloque de contexto para los prompts de IA. Devuelve '' si no hay precios cargados.
 export function priceRefsPromptBlock() {
     const prices = listStmt.all();

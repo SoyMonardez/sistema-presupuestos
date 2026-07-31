@@ -17,11 +17,12 @@
 import { Router } from 'express';
 import db, { loadUnitCatalog } from '../db.js';
 import { complete, completeStream, webSearch } from '../ai/provider.js';
-import { normalizeOps } from '../lib/ops.js';
+import { normalizeOps, applyOps } from '../lib/ops.js';
 import { simulate, simulationToOps } from '../lib/simulate.js';
+import { revisarPresupuesto } from '../lib/verificar.js';
 import { partialString } from '../lib/partial-json.js';
 import { conReintentoDeTamaño } from '../lib/images.js';
-import { priceRefsPromptBlock } from './prices.js';
+import { priceRefsPromptBlock, listarPreciosRef } from './prices.js';
 import { unitsPromptBlock } from './units.js';
 import { loadSettings } from './settings.js';
 import { markupPromptBlock } from '../lib/markup.js';
@@ -88,7 +89,55 @@ CUÁNDO USAR CADA UNO
 
 3) "web_query" — cuando pregunta por precios de mercado ACTUALES que no están en su tarifario.
    Ej: "¿a cuánto está la bolsa de cemento?" → "precio bolsa cemento 50kg Argentina hoy"
-   Poné la consulta y NADA más (sin "reply" largo): te vuelvo a preguntar con los resultados y ahí contestás.
+   Poné la consulta y NADA más (sin "reply" largo, sin "ops"): te vuelvo a preguntar
+   con los resultados y ahí armás la respuesta o el presupuesto con esos números.
+   Si te pidió "precios actuales" o "precios de hoy", USÁ ESTO. No estimes de
+   memoria y digas que buscaste: no buscaste.
+
+======================= CÓMO SE ARMA UN PRESUPUESTO =======================
+Cuando te pide presupuestar un trabajo (no editar uno que ya existe), seguí este
+orden. No lo saltees aunque el trabajo parezca simple: el orden es lo que hace
+que el número final se pueda defender.
+
+PASO 1 — ENTENDER QUÉ HAY QUE HACER
+Leé bien qué te pidió y con qué medidas. Si falta un dato que cambia el precio de
+verdad (el espesor de un contrapiso, si la pared es de 1/2 o 1 ladrillo, si hay
+que demoler algo antes), PREGUNTÁ en vez de suponer. Una pregunta corta ahora
+vale más que un presupuesto que hay que rehacer.
+
+PASO 2 — COMPUTAR
+Sacá las cantidades de las medidas que te dio, con la cuenta escrita.
+   "Pared de 9 m x 1.10 m = 9.9 m²"
+   "9.9 m² x 62 ladrillos/m² = 614 ladrillos"
+Cada cantidad tiene que salir de una cuenta, no de una impresión.
+
+PASO 3 — DESGLOSAR EN ITEMS DE VERDAD
+Un trabajo NO es un item. Separalo en lo que realmente se paga por separado:
+   - Materiales principales (cada uno con su unidad real: ladrillos por unidad,
+     cemento por bolsa, hormigón por m³)
+   - Materiales secundarios y consumibles
+   - Mano de obra (en horas o días de cuadrilla, NO en m²: se le paga por tiempo)
+   - Movimiento: flete, traslado, combustible
+   - Trabajos previos si hacen falta (demolición, replanteo, limpieza)
+Tres items en m² con todo adentro es lo que hace un aficionado. Él tiene que
+poder mirar el presupuesto y saber qué le está costando cada cosa.
+
+PASO 4 — PONERLE PRECIO A CADA UNO, EN ESTE ORDEN
+   1º Su TARIFARIO. Si el item está ahí, va ese precio y punto (ya es de venta).
+   2º Lo que COBRÓ ANTES por algo parecido (te lo paso más abajo cuando hay).
+   3º Precios de internet, si te los pidió: usá "web_query" ANTES de estimar.
+   4º Tu estimación, y solo si no había nada de lo anterior. Decilo en "reply".
+Los casos 3 y 4 son COSTO DIRECTO: marcalos con "es_costo_directo": true.
+
+PASO 5 — RELEER ANTES DE MANDAR
+Antes de cerrar el JSON, revisá tu propio presupuesto:
+   ¿Está la mano de obra, o quedó solo material?
+   ¿Las cantidades salen de las medidas que él dio?
+   ¿Falta el flete, la demolición, algo que en la obra siempre aparece?
+   ¿Alguno quedó en cero?
+Si algo no cierra, arreglalo antes de mandarlo. Si falta un dato que no tenés,
+decíselo en "reply" en vez de rellenarlo con un número inventado.
+===========================================================================
 
 SI TE MANDA UNA FOTO
 Puede ser tres cosas, fijate cuál:
@@ -355,8 +404,18 @@ async function responder(chat, texto, itemNum, onDelta, imagen) {
 
     // Segunda pasada: pidió buscar precios en internet. Se hace la búsqueda y
     // se le devuelve para que conteste con los datos a la vista.
+    //
+    // Antes esto solo corría si NO venían ops ni simulate, y ahí estaba el
+    // problema: ante "presupuestá esto con precios de hoy" el modelo devuelve
+    // las dos cosas juntas, la búsqueda no corría nunca, y encima la respuesta
+    // decía "no encontré precios actuales" sin haber buscado. Justo el caso más
+    // común de la función.
+    //
+    // Ahora, si pidió buscar, se busca. Las ops de la primera pasada se
+    // descartan a propósito: estaban armadas con precios inventados, y las que
+    // valen son las de la segunda, hechas con los datos reales.
     let fuentes = [];
-    if (respuesta.web_query && !respuesta.ops?.length && !respuesta.simulate) {
+    if (respuesta.web_query) {
         try {
             const hallazgo = await webSearch(String(respuesta.web_query).slice(0, 300));
             fuentes = hallazgo.sources || [];
@@ -365,7 +424,7 @@ async function responder(chat, texto, itemNum, onDelta, imagen) {
                 { role: 'assistant', content: JSON.stringify({ reply: 'Buscando…' }) },
                 {
                     role: 'user',
-                    content: `Resultados de la búsqueda "${respuesta.web_query}":\n${hallazgo.text}\n\nContestale con estos datos. Aclarale que son precios de internet, no de su tarifario, y que los revise. No devuelvas web_query de nuevo.`,
+                    content: `Resultados de la búsqueda "${respuesta.web_query}":\n${hallazgo.text}\n\nUsá ESTOS precios, no los de tu memoria. Si lo que te pidió era armar o ajustar un presupuesto, mandá ahora las "ops" con estos valores como costo directo ("es_costo_directo": true). Aclarale que salieron de internet y no de su tarifario, y que los revise. No devuelvas web_query de nuevo.`,
                 },
             ];
             // En la segunda pasada se vuelve a arrancar el texto desde cero: lo
@@ -395,9 +454,11 @@ async function responder(chat, texto, itemNum, onDelta, imagen) {
     const adjunto = {};
 
     // La simulación la calcula el servidor: la IA solo dijo qué simular.
+    let simulacionValida = false;
     if (respuesta.simulate) {
         const sim = simulate(items, respuesta.simulate, catalog);
         if (sim.ok) {
+            simulacionValida = true;
             adjunto.simulation = { ...sim, items: undefined };  // los items completos no van al cliente
             // Si acepta la simulación, se aplica por el mismo camino que todo
             // lo demás: se guardan las ops equivalentes listas para confirmar.
@@ -411,11 +472,31 @@ async function responder(chat, texto, itemNum, onDelta, imagen) {
     }
 
     // Cambios pedidos directamente.
-    if (Array.isArray(respuesta.ops) && respuesta.ops.length) {
+    //
+    // Si el modelo mandó simulate Y ops a la vez, mandan las de la simulación.
+    // No es un empate cualquiera: la tarjeta que ve en pantalla son los números
+    // de la simulación, así que aplicar otra cosa sería mostrarle un total y
+    // ejecutarle otro. Ese bug estuvo vivo y es de los que se pagan.
+    if (Array.isArray(respuesta.ops) && respuesta.ops.length && !simulacionValida) {
         const { ops, warnings } = normalizeOps(respuesta.ops, items, catalog, 200, markup);
         adjunto.ops = ops;
         if (warnings.length) adjunto.warnings = warnings;
+    } else if (respuesta.ops?.length && simulacionValida) {
+        console.warn('[chat] llegaron simulate y ops juntos: se aplican los de la simulación, que es lo que se muestra');
     }
+
+    // Revisión del presupuesto que quedaría. No cuesta tokens y agarra la clase
+    // de error que ninguna IA ve sola: presupuestar a costo, olvidarse la mano de
+    // obra, cantidades que no salen de las medidas que él dio.
+    if (adjunto.ops?.length) {
+        const avisos = revisarPresupuesto(applyOps(items, adjunto.ops), {
+            propuestos: adjunto.ops,
+            tarifario: listarPreciosRef(),
+            markup,
+        });
+        if (avisos.length) adjunto.warnings = [...(adjunto.warnings || []), ...avisos];
+    }
+
     if (fuentes.length) adjunto.sources = fuentes.slice(0, 4);
 
     const reply = String(respuesta.reply || '').slice(0, 3000)

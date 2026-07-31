@@ -12,6 +12,17 @@ const MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-5';
 
 export const name = 'claude';
 
+// Piso de tokens de salida.
+//
+// Los techos que vienen de provider.js están calculados para el límite por
+// minuto del tier gratuito de Groq, que es apretadísimo (8000 TPM para prompt +
+// respuesta). Acá ese límite no existe, y en cambio max_tokens incluye lo que el
+// modelo piensa: pasarle 2500 sería ahogarle el razonamiento justo en las tareas
+// que se le mandan PORQUE hay que razonarlas.
+//
+// Así que el número que llega se toma como mínimo, no como máximo.
+const PISO_TOKENS = 8000;
+
 let client = null;
 function getClient() {
     if (!process.env.ANTHROPIC_API_KEY) throw new Error('Falta ANTHROPIC_API_KEY en .env');
@@ -47,7 +58,7 @@ function extractText(content) {
 function buildRequest({ system, messages, schema, maxTokens, effort }) {
     const request = {
         model: MODEL,
-        max_tokens: maxTokens,
+        max_tokens: Math.max(Number(maxTokens) || 0, PISO_TOKENS),
         messages: toClaudeMessages(messages),
         // El pensamiento adaptativo es lo que hace que las conversiones y la
         // lectura de una hoja borrosa salgan bien; el effort le pone techo al gasto.
