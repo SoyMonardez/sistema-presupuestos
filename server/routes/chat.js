@@ -56,8 +56,30 @@ CUÁNDO USAR CADA UNO
    {"action":"update","num":2,"unit_price":300000}
    {"action":"remove","num":3}
    {"action":"add","item":{"name":"...","detail":"...","quantity":N,"unit":"...","unit_price":N}}
-   Los cambios NO se aplican solos: se le muestran para que confirme. Decíselo en "reply".
    En las conversiones vos solo indicás la unidad y la medida que sepas; la cuenta la hace el sistema.
+
+   ==================== LO MÁS IMPORTANTE DE TODO ====================
+   PROPONER ES MANDAR LAS "ops". No existe proponer con palabras.
+
+   Si en tu "reply" decís que vas a agregar, cambiar, sumar o sacar algo, ESE MISMO
+   mensaje TIENE que traer las "ops". No hay una segunda vuelta para mandarlas.
+
+   MAL:  {"reply":"Dale, te sumo un item de traslado por 40 mil. ¿Lo cargo así?"}
+         (le prometiste algo y no pasó NADA: no hay ops, no hay tarjeta, no hay
+          nada que confirmar. Se queda esperando un cambio que nunca va a llegar.)
+   BIEN: {"reply":"Te sumo traslado y combustible por 40 mil. Miralo y confirmá.",
+          "ops":[{"action":"add","item":{"name":"Traslado y combustible","detail":"","quantity":1,"unit":"global","unit_price":40000}}]}
+
+   No hace falta que le preguntes "¿lo cargo?" antes de mandar las ops: mandalas
+   siempre. El sistema le muestra una tarjeta con los números y los botones
+   "Aplicar" y "Dejalo así". La confirmación la maneja el sistema, no vos.
+
+   NUNCA digas que aplicaste, cargaste, sumé, agregué o modificaste algo. VOS NO
+   PODÉS APLICAR NADA: solo proponés, y el que aplica es él tocando el botón.
+   Decir "listo, lo apliqué" es mentirle, porque el presupuesto no cambió.
+   Hablá siempre en futuro y de lo que proponés: "te sumo", "te propongo",
+   "quedaría así".
+   ===================================================================
 
 3) "web_query" — cuando pregunta por precios de mercado ACTUALES que no están en su tarifario.
    Ej: "¿a cuánto está la bolsa de cemento?" → "precio bolsa cemento 50kg Argentina hoy"
@@ -110,6 +132,29 @@ function historicoPromptBlock(budgetId, consulta) {
     const lineas = filas.map(f =>
         `- "${f.name}": $${f.unit_price} por ${f.unit} (en "${f.obra}"${f.client ? `, cliente ${f.client}` : ''}, ${String(f.updated_at).slice(0, 10)})`);
     return `\n\nLO QUE COBRÓ ANTES POR TRABAJOS PARECIDOS (de sus propios presupuestos — es el dato más confiable que tenés):\n${lineas.join('\n')}`;
+}
+
+// "sí", "dale", "aplicalo"… Tiene que ser el mensaje entero o casi: si escribió
+// "si, pero cambiale el precio" no es una confirmación pelada, es un pedido nuevo.
+const CONFIRMACION = /^\s*(s[ií]+|dale|ok(ey)?|listo|aplica(lo|r)?|hacelo|obvio|correcto|perfecto|va|vale|confirmo|adelante|de una)[\s.,!]*$/i;
+
+function esConfirmacion(texto) {
+    return CONFIRMACION.test(String(texto || ''));
+}
+
+/** ¿El último mensaje del asistente traía cambios para aplicar? */
+function ultimaPropuestaTraeOps(chatId) {
+    const ultimo = db.prepare(
+        `SELECT tool_json FROM chat_messages
+         WHERE conversation_id = ? AND role = 'assistant'
+         ORDER BY id DESC LIMIT 1`
+    ).get(chatId);
+    if (!ultimo?.tool_json) return false;
+    try {
+        return Boolean(JSON.parse(ultimo.tool_json)?.ops?.length);
+    } catch {
+        return false;
+    }
 }
 
 function itemsParaPrompt(items) {
@@ -207,6 +252,18 @@ async function responder(chat, texto, itemNum, onDelta, imagen) {
         { role: 'user', content: `Presupuesto actual:\n${JSON.stringify(contexto).slice(0, 7000)}` },
         ...previos.map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content })),
     ];
+
+    // El modelo a veces propone con palabras y se olvida de mandar las "ops".
+    // Entonces el usuario contesta "sí, dale" y no pasa nada: no hubo cambios que
+    // aplicar, y encima el modelo suele rematar con un "listo, lo apliqué" que es
+    // mentira. Si detectamos justo esa situación —dijo que sí, y lo anterior no
+    // traía ops— se lo recordamos acá mismo.
+    if (esConfirmacion(texto) && !ultimaPropuestaTraeOps(chat.id)) {
+        mensajes.push({
+            role: 'user',
+            content: 'IMPORTANTE: te acaba de confirmar lo que propusiste, pero en tu mensaje anterior no mandaste las "ops", así que el presupuesto sigue igual. Mandá AHORA las "ops" de eso que propusiste. No digas que ya lo aplicaste: todavía no pasó nada.',
+        });
+    }
 
     // Con foto la tarea es 'vision': va al modelo que sabe mirar, que además es
     // el que el plan manda usar cuando equivocarse sale caro.

@@ -18,10 +18,17 @@ const Chat = (() => {
     const $ = (sel) => document.querySelector(sel);
 
     // "sí", "dale", "aplicalo"… El usuario responde en castellano, no toca botones.
-    const CONFIRMA = /^\s*(s[ií]+|dale|ok(ey)?|listo|aplica(lo|r)?|hacelo|obvio|correcto|perfecto|va|vale|confirmo|adelante)\b/i;
-    const RECHAZA  = /^\s*(no|nel|nop|dej[aá](lo)?|olvidalo|cancel(a|ar|alo)?|mejor no)\b/i;
+    //
+    // Tienen que cubrir el mensaje ENTERO. Con un \b al final, "si, pero bajale el
+    // precio" contaba como confirmación y aplicaba los cambios en vez de escuchar
+    // el pedido nuevo, que es lo contrario de lo que pidió.
+    const CONFIRMA = /^\s*(s[ií]+|dale|ok(ey)?|listo|aplica(lo|r)?|hacelo|obvio|correcto|perfecto|va|vale|confirmo|adelante|de una)[\s.,!]*$/i;
+    const RECHAZA  = /^\s*(no|nel|nop|dej[aá](lo)?|olvidalo|cancel(a|ar|alo)?|mejor no)[\s.,!]*$/i;
 
-    let opsPendientes = null;   // lo último que propuso, esperando un sí o un no
+    // Lo último que propuso, esperando un sí o un no. Vale SOLO para el último
+    // mensaje del asistente: si contestó de nuevo sin proponer nada, la propuesta
+    // vieja ya no está en pantalla y un "sí" no puede resucitarla.
+    let opsPendientes = null;
 
     function init(config) {
         cfg = config;
@@ -367,11 +374,14 @@ const Chat = (() => {
         // ES la confirmación, no hace falta que además toque el botón.
         if (opsPendientes) {
             if (CONFIRMA.test(texto)) {
-                aplicar(opsPendientes);
+                const hecho = aplicar(opsPendientes);
                 $('#chat-input').value = '';
                 autoGrow();
                 pintar('user', texto);
-                pintar('assistant', 'Listo, lo apliqué.');
+                // Se cuenta lo que se aplicó de verdad. Decir "listo" sin mirar es
+                // como quedó el bug de antes: el mensaje decía que sí y el
+                // presupuesto seguía igual.
+                pintar('assistant', hecho ? `Listo, ${hecho}.` : 'No había nada para aplicar.');
                 return;
             }
             if (RECHAZA.test(texto)) {
@@ -433,6 +443,7 @@ const Chat = (() => {
                 // le cuelgan las tarjetas, sin volver a dibujar el mensaje.
                 burbuja.textContent = message.content;
                 completar(burbuja.closest('.chat-msg'), message.data);
+                marcarPendientes(message.data);
             } else {
                 // No hubo streaming (o la respuesta se rehízo tras buscar en
                 // internet, y lo que se mostró quedó viejo): se pinta de nuevo.
@@ -478,10 +489,26 @@ const Chat = (() => {
         wrap.appendChild(burbuja);
 
         completar(wrap, data);
+        if (role !== 'user') marcarPendientes(data);
 
         $('#chat-messages').appendChild(wrap);
         if (scroll) scrollAbajo();
         return wrap;
+    }
+
+    /**
+     * Deja anotado lo que quedó "sobre la mesa" esperando un sí o un no.
+     *
+     * Cada respuesta del asistente reemplaza a la anterior: si esta no propone
+     * nada, lo de antes deja de estar pendiente. Aplicar una propuesta de tres
+     * mensajes atrás porque dijo "sí" a otra cosa es justamente el bug a evitar.
+     *
+     * Se llama desde los dos caminos —el normal y el de streaming— a propósito:
+     * cuando esto vivía adentro de pintar(), el streaming no pasaba por ahí y las
+     * propuestas quedaban sin registrar, así que decir "sí" no aplicaba nada.
+     */
+    function marcarPendientes(data) {
+        opsPendientes = data?.ops?.length ? data.ops : null;
     }
 
     /** Cuelga las tarjetas (simulación, cambios, avisos, fuentes) de un mensaje. */
@@ -502,7 +529,6 @@ const Chat = (() => {
             wrap.appendChild(av);
         }
         if (data.sources?.length) wrap.appendChild(fuentes(data.sources));
-        if (data.ops?.length) opsPendientes = data.ops;
     }
 
     // La tarjeta de simulación: números reales, y nada aplicado todavía.
@@ -609,10 +635,24 @@ const Chat = (() => {
         return box;
     }
 
+    /**
+     * Aplica y devuelve en castellano qué pasó ("agregué 1 item y cambié 2"),
+     * o null si no había nada. El que llama lo muestra tal cual: así lo que dice
+     * el chat y lo que quedó en el presupuesto no se pueden separar.
+     */
     function aplicar(ops) {
+        if (!ops?.length) return null;
         cfg.applyOps(ops);
         opsPendientes = null;
         marcarTarjetasResueltas('Aplicado');
+
+        const n = (a) => ops.filter(o => o.action === a).length;
+        const partes = [];
+        if (n('add'))    partes.push(`agregué ${n('add')} item${n('add') === 1 ? '' : 's'}`);
+        if (n('update')) partes.push(`cambié ${n('update')} item${n('update') === 1 ? '' : 's'}`);
+        if (n('remove')) partes.push(`saqué ${n('remove')} item${n('remove') === 1 ? '' : 's'}`);
+        if (!partes.length) return null;
+        return partes.join(' y ');
     }
 
     /** Una propuesta ya resuelta no puede volver a aplicarse desde el historial. */
