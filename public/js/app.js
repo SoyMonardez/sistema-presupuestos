@@ -165,6 +165,7 @@
     async function openPrices() {
         prices = (await API.getPrices()).map(p => ({ name: p.name, unit: p.unit, price: p.price }));
         renderPrices();
+        cargarMargenes();
         show('prices');
         Nav.pushLayer('prices', async () => {
             clearTimeout(pricesTimer);
@@ -172,6 +173,79 @@
             await openList();
         });
     }
+
+    // ===== Margen e impuestos =====
+    // Lo que separa el costo (material + mano de obra) del precio que se cobra.
+    // Sin esto la IA presupuestaba a costo y el trabajo quedaba sin ganancia.
+    const CAMPOS_MARGEN = {
+        '#set-gastos': 'gastos_pct',
+        '#set-utilidad': 'utilidad_pct',
+        '#set-iibb': 'iibb_pct',
+        '#set-iva': 'iva_pct',
+    };
+    let margenTimer = null;
+
+    async function cargarMargenes() {
+        try {
+            const { settings, ejemplo } = await API.getSettings();
+            for (const [sel, campo] of Object.entries(CAMPOS_MARGEN)) {
+                $(sel).value = String(settings[campo] ?? '').replace('.', ',');
+            }
+            $('#set-aplica-iva').checked = Boolean(settings.aplica_iva);
+            pintarEjemploMargen(ejemplo);
+        } catch { /* si falla se queda con lo que muestre el formulario */ }
+    }
+
+    function pintarEjemploMargen(e) {
+        if (!e) return;
+        const filas = [
+            ['Costo (material + mano de obra)', e.costo_directo],
+            ['+ Gastos generales', e.gastos_generales],
+            ['+ Utilidad', e.utilidad],
+            ['+ Ingresos brutos', e.iibb],
+        ];
+        if (e.aplica_iva) filas.push(['+ IVA', e.iva]);
+
+        const box = $('#markup-ejemplo');
+        box.innerHTML = '<span class="markup-ejemplo-titulo">Un trabajo que te cuesta $100.000 se cobra:</span>';
+        for (const [etiqueta, monto] of filas) {
+            const row = document.createElement('div');
+            row.className = 'markup-row';
+            row.innerHTML = '<span></span><span></span>';
+            row.children[0].textContent = etiqueta;
+            row.children[1].textContent = formatARS(monto);
+            box.appendChild(row);
+        }
+        const total = document.createElement('div');
+        total.className = 'markup-row markup-row-total';
+        total.innerHTML = '<span></span><span></span>';
+        total.children[0].textContent = 'Precio final';
+        total.children[1].textContent = formatARS(e.total);
+        box.appendChild(total);
+    }
+
+    function guardarMargenes() {
+        $('#prices-status').textContent = 'Guardando…';
+        clearTimeout(margenTimer);
+        margenTimer = setTimeout(async () => {
+            const body = { aplica_iva: $('#set-aplica-iva').checked };
+            for (const [sel, campo] of Object.entries(CAMPOS_MARGEN)) {
+                body[campo] = parseQty($(sel).value);
+            }
+            try {
+                const { ejemplo } = await API.saveSettings(body);
+                pintarEjemploMargen(ejemplo);
+                $('#prices-status').textContent = 'Guardado';
+                setTimeout(() => { if ($('#prices-status').textContent === 'Guardado') $('#prices-status').textContent = ''; }, 1500);
+            } catch (err) {
+                $('#prices-status').textContent = '';
+                toast('No se pudo guardar: ' + err.message, true);
+            }
+        }, 700);
+    }
+
+    Object.keys(CAMPOS_MARGEN).forEach(sel => $(sel).addEventListener('input', guardarMargenes));
+    $('#set-aplica-iva').addEventListener('change', guardarMargenes);
 
     function schedulePricesSave() {
         $('#prices-status').textContent = 'Guardando…';

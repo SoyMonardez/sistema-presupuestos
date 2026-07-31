@@ -53,6 +53,26 @@ const Nav = (() => {
         // gesto sale de la app, que es lo que corresponde.
     });
 
+    // ======================= Barras de scroll que se desvanecen =======================
+    // La barra fija a un costado se ve mal. Se enciende mientras se scrollea y se
+    // apaga sola un rato después, como en las apps del celular.
+    //
+    // Va por delegación en captura porque el evento "scroll" no burbujea: hay que
+    // escucharlo en la fase de captura del documento para enterarse de cualquier
+    // elemento que scrollee, incluidos los que se crean después.
+
+    const APAGAR_MS = 900;
+    const temporizadores = new WeakMap();
+
+    document.addEventListener('scroll', (e) => {
+        const el = e.target;
+        if (!el || el === document || !el.classList?.contains('scroll-suave')) return;
+
+        el.classList.add('scrolleando');
+        clearTimeout(temporizadores.get(el));
+        temporizadores.set(el, setTimeout(() => el.classList.remove('scrolleando'), APAGAR_MS));
+    }, true);
+
     // ======================= Arrastrar la hoja para cerrar =======================
     // El gesto que se espera de una hoja inferior: se agarra y se tira para abajo.
     // Se engancha una sola vez sobre el documento (delegación), así vale para las
