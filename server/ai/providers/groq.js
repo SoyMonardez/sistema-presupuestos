@@ -78,11 +78,19 @@ function parseJsonFlexible(raw) {
 // "failed to validate JSON" con failed_generation vacío — un error que no dice
 // nada de lo que realmente pasó.
 //
-// Para las tareas que devuelven JSON se apaga el razonamiento: los prompts ya
-// describen la forma exacta de la respuesta, y lo que devuelve se valida después
-// contra normalizeOp igual. Preferimos una respuesta que llega a una respuesta
-// "mejor pensada" que se corta por la mitad.
-const EFFORT_TO_GROQ = { low: 'none', medium: 'none', high: 'low' };
+// Durante un tiempo esto estuvo en 'none' PARA TODO, y fue un error caro: las
+// tareas que deciden plata (armar un presupuesto, leer una hoja, editar items)
+// quedaron sin pensar nada, y se notó — presupuestos a costo, cantidades
+// redondeadas a ojo, precios tirados de memoria.
+//
+// Ahora cada nivel pide lo suyo, y el riesgo de quedarse sin margen se cubre
+// donde corresponde: si el modelo gasta todo pensando y devuelve vacío, se
+// reintenta sin razonamiento (ver reintentoSinRazonar más abajo). Es mejor
+// pensar y tener una red que no pensar nunca.
+// Ojo: qwen3 en Groq solo acepta 'none' o 'default'. Los niveles finos ('low',
+// 'medium', 'high') que sí entiende Claude devuelven 400 acá, así que se
+// colapsan: lo mecánico no piensa, lo que decide números piensa.
+const EFFORT_TO_GROQ = { low: 'none', medium: 'default', high: 'default' };
 
 /**
  * Reintenta cuando Groq dice "esperá y probá de nuevo".
@@ -200,20 +208,52 @@ export async function completeStream(opts, onDelta) {
     return wantsJson ? parseJsonFlexible(completo) : { text: completo };
 }
 
+/**
+ * Un modelo que razona gasta del MISMO presupuesto para pensar y para contestar.
+ * Con un prompt largo puede quedarse sin margen: termina por "length" habiendo
+ * pensado todo y escrito nada, y Groq lo reporta como "failed to validate JSON"
+ * con failed_generation vacío, que no dice nada de lo que pasó.
+ *
+ * Cuando eso ocurre se rehace la consulta sin razonamiento. Se pierde calidad en
+ * ese mensaje puntual, pero se pierde entero si no.
+ */
+function sinMargenParaContestar(data, err) {
+    if (err) return /failed_generation":\s*""/.test(err.message) || /json_validate_failed/.test(err.message);
+    const choice = data?.choices?.[0];
+    return choice?.finish_reason === 'length' && !choice?.message?.content;
+}
+
 export async function complete({ system, messages, schema, expectJson = false, maxTokens = 2000, temperature = 0.2, hasImages = false, effort = 'medium' }) {
     const wantsJson = Boolean(schema) || expectJson;
-    const res = await fetchConEspera(`${API}/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify(buildBody({ system, messages, schema, expectJson, maxTokens, temperature, hasImages, effort })),
-    });
 
-    if (!res.ok) {
-        const detail = await res.text();
-        throw new Error(`Groq ${res.status}: ${detail.slice(0, 400)}`);
+    const pedir = async (esfuerzo) => {
+        const res = await fetchConEspera(`${API}/chat/completions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify(buildBody({ system, messages, schema, expectJson, maxTokens, temperature, hasImages, effort: esfuerzo })),
+        });
+        if (!res.ok) {
+            const detail = await res.text();
+            const err = new Error(`Groq ${res.status}: ${detail.slice(0, 400)}`);
+            if (sinMargenParaContestar(null, err)) err.sinMargen = true;
+            throw err;
+        }
+        return res.json();
+    };
+
+    let data;
+    try {
+        data = await pedir(effort);
+        if (sinMargenParaContestar(data)) {
+            console.warn('[groq] se quedó sin margen pensando, reintento sin razonamiento');
+            data = await pedir('low');   // 'low' mapea a 'none': sin razonamiento
+        }
+    } catch (err) {
+        if (!err.sinMargen) throw err;
+        console.warn('[groq] se quedó sin margen pensando, reintento sin razonamiento');
+        data = await pedir('low');
     }
 
-    const data = await res.json();
     const content = data.choices?.[0]?.message?.content;
     if (!content) throw new Error('Respuesta vacía de Groq');
 

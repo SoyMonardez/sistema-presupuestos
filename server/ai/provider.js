@@ -25,24 +25,30 @@ const DEFAULT_ROUTES = {
 };
 
 // Valores por defecto razonables para cada tarea, pisables desde el que llama.
+//
+// Sobre "effort": es cuánto puede pensar el modelo antes de contestar. Está
+// separado de maxTokens a propósito, porque los dos salen del mismo presupuesto
+// y hay que balancearlos. Las tareas mecánicas no necesitan pensar; las que
+// deciden plata sí, y mucho — un presupuesto mal estimado se factura.
+//
+// Ojo con maxTokens en Groq: lo descuenta del límite por minuto ANTES de correr
+// nada, así que un techo alto se paga aunque no se use. Por eso los números son
+// ajustados y no generosos.
 const TASK_DEFAULTS = {
     suggest:     { maxTokens: 400,  temperature: 0.4,  effort: 'low' },
     spellcheck:  { maxTokens: 2500, temperature: 0,    effort: 'low' },
-    parse:       { maxTokens: 2500, temperature: 0.2,  effort: 'medium' },
     client_data: { maxTokens: 300,  temperature: 0,    effort: 'low' },
-    // Estos tres devuelven JSON acotado (una tanda de ops, una respuesta de chat),
-    // no prosa larga. Pedir 8000 tokens de salida no los hacía mejores y sí hacía
-    // rebotar el request entero: Groq descuenta max_tokens del presupuesto por
-    // minuto ANTES de correr nada, así que un techo alto se paga aunque no se use.
-    command:     { maxTokens: 3000, temperature: 0.15, effort: 'medium' },
-    chat:        { maxTokens: 2500, temperature: 0.3,  effort: 'medium' },
-    // Ojo con maxTokens acá: Groq lo suma al presupuesto de tokens por minuto
-    // ANTES de correr nada, así que pedir 8000 de salida hacía rebotar cualquier
-    // foto por límite de cuota aunque la imagen fuera chica. Pero tampoco puede
-    // ser muy bajo: los modelos que razonan gastan tokens pensando y, si se
-    // quedan sin margen, devuelven vacío. 4000 es el punto que deja leer una
-    // hoja entera y sigue entrando en el tier gratuito.
-    vision:      { maxTokens: 4000, temperature: 0.1,  effort: 'medium' },
+
+    // Las que deciden números. Acá el razonamiento no es un lujo: sin él, el
+    // modelo tira el primer precio que se le viene y arma presupuestos que no
+    // cierran. Se les da margen de salida suficiente para que pensar no le coma
+    // el lugar a la respuesta.
+    parse:       { maxTokens: 2500, temperature: 0.2,  effort: 'medium' },
+    command:     { maxTokens: 3500, temperature: 0.15, effort: 'medium' },
+    // temperature baja: esto produce plata, no prosa. Lo que se gana en variedad
+    // se paga en números inventados.
+    chat:        { maxTokens: 3500, temperature: 0.15, effort: 'high' },
+    vision:      { maxTokens: 4000, temperature: 0.1,  effort: 'high' },
 };
 
 const warned = new Set();
