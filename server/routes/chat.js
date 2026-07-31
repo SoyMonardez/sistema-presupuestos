@@ -210,7 +210,14 @@ async function responder(chat, texto, itemNum, onDelta, imagen) {
 
     // Con foto la tarea es 'vision': va al modelo que sabe mirar, que además es
     // el que el plan manda usar cuando equivocarse sale caro.
+    //
+    // Pero el techo de salida se fija a mano en vez de heredar el de 'vision'
+    // (4000): una respuesta del chat es la misma con foto o sin ella, y Groq
+    // descuenta ese techo del presupuesto por minuto antes de correr nada. Con
+    // 4000 el request se pasaba por 27 tokens y rebotaba entero, aun con la
+    // imagen achicada al mínimo — el problema no era la foto, era el techo.
     const tarea = imagen ? 'vision' : 'chat';
+    const TOKENS_SALIDA = 2500;
 
     // La foto va pegada al último mensaje del usuario, que es el que la mandó.
     // El prompt del chat ya es largo, así que acá se arranca con la imagen más
@@ -249,7 +256,7 @@ async function responder(chat, texto, itemNum, onDelta, imagen) {
     if (emitir) {
         try {
             respuesta = await conFoto(mensajes, (msgs) =>
-                completeStream({ task: tarea, system, messages: msgs, expectJson: true }, emitir));
+                completeStream({ task: tarea, system, messages: msgs, expectJson: true, maxTokens: TOKENS_SALIDA }, emitir));
         } catch (err) {
             // El streaming va sin modo JSON estricto para que sea streaming de
             // verdad (ver providers/groq.js), así que de vez en cuando el modelo
@@ -258,12 +265,12 @@ async function responder(chat, texto, itemNum, onDelta, imagen) {
             if (!/JSON/i.test(err.message)) throw err;
             console.warn('[chat] el stream no devolvió JSON válido, reintento sin streaming');
             respuesta = await conFoto(mensajes, (msgs) =>
-                complete({ task: tarea, system, messages: msgs, expectJson: true }));
+                complete({ task: tarea, system, messages: msgs, expectJson: true, maxTokens: TOKENS_SALIDA }));
             rehizo = true;   // lo que se mostró quedó viejo
         }
     } else {
         respuesta = await conFoto(mensajes, (msgs) =>
-            complete({ task: tarea, system, messages: msgs, expectJson: true }));
+            complete({ task: tarea, system, messages: msgs, expectJson: true, maxTokens: TOKENS_SALIDA }));
     }
 
     // Segunda pasada: pidió buscar precios en internet. Se hace la búsqueda y
@@ -287,8 +294,8 @@ async function responder(chat, texto, itemNum, onDelta, imagen) {
             mostrado = '';
             rehizo = true;
             respuesta = emitir
-                ? await completeStream({ task: 'chat', system, messages: seguimiento, expectJson: true }, emitir)
-                : await complete({ task: 'chat', system, messages: seguimiento, expectJson: true });
+                ? await completeStream({ task: 'chat', system, messages: seguimiento, expectJson: true, maxTokens: TOKENS_SALIDA }, emitir)
+                : await complete({ task: 'chat', system, messages: seguimiento, expectJson: true, maxTokens: TOKENS_SALIDA });
         } catch (err) {
             console.warn('[chat] búsqueda web falló:', err.message);
             // Distinguir la cuota agotada de una falla cualquiera: si le decís

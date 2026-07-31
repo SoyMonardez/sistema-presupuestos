@@ -54,6 +54,9 @@ const Chat = (() => {
         });
         $('#chat-attach-remove').addEventListener('click', quitarAdjunto);
 
+        conectarPegar();
+        conectarArrastre();
+
         $('#chat-new').addEventListener('click', nuevaConversacion);
         $('#chat-history').addEventListener('click', abrirListaChats);
         $('#chats-modal-close').addEventListener('click', () => Nav.popLayer());
@@ -222,9 +225,15 @@ const Chat = (() => {
                 // se manda tal cual y la achica el servidor.
                 datos = await leerCrudo(file);
             }
-            adjunto = { ...datos, nombre: file.name };
+            // Una captura pegada del portapapeles llega sin nombre o como
+            // "image.png", que no le dice nada a nadie.
+            const nombre = (!file.name || /^image\.\w+$/i.test(file.name))
+                ? 'Captura pegada'
+                : file.name;
+
+            adjunto = { ...datos, nombre };
             $('#chat-attach-img').src = `data:${adjunto.mediaType};base64,${adjunto.data}`;
-            $('#chat-attach-name').textContent = file.name;
+            $('#chat-attach-name').textContent = nombre;
             $('#chat-attach-preview').hidden = false;
             $('#chat-input').focus();
         } catch (err) {
@@ -236,6 +245,92 @@ const Chat = (() => {
         adjunto = null;
         $('#chat-attach-preview').hidden = true;
         $('#chat-attach-img').removeAttribute('src');
+    }
+
+    /** ¿La pestaña del asistente es la que se está viendo? */
+    function chatVisible() {
+        const btns = [...document.querySelectorAll('.tab-btn')];
+        return btns[1]?.classList.contains('active')
+            && !document.querySelector('#view-editor')?.hidden;
+    }
+
+    /** Saca la primera imagen de un DataTransfer (portapapeles o arrastre). */
+    function primeraImagen(dt) {
+        if (!dt) return null;
+        // Los archivos sueltos vienen en .files; una captura pegada desde el
+        // portapapeles llega en .items y hay que pedirle el File.
+        for (const f of dt.files || []) {
+            if (/^image\//.test(f.type)) return f;
+        }
+        for (const it of dt.items || []) {
+            if (it.kind === 'file' && /^image\//.test(it.type)) {
+                const f = it.getAsFile();
+                if (f) return f;
+            }
+        }
+        return null;
+    }
+
+    // ---- Pegar (Ctrl+V en la compu, "Pegar" del teclado en el celular) ----
+    // Se escucha en el documento y no solo en el campo de texto: uno saca la
+    // captura y pega, sin acordarse de hacer clic en el input primero. Igual se
+    // ignora si el chat no está a la vista o si está escribiendo en otro lado,
+    // para no robarle el pegado a la descripción de un item.
+    function conectarPegar() {
+        document.addEventListener('paste', async (e) => {
+            if (!chatVisible()) return;
+            const activo = document.activeElement;
+            const escribiendoEnOtroLado = activo
+                && activo !== $('#chat-input')
+                && /^(INPUT|TEXTAREA)$/.test(activo.tagName);
+            if (escribiendoEnOtroLado) return;
+
+            const file = primeraImagen(e.clipboardData);
+            if (!file) return;              // pegó texto: que siga su curso normal
+            e.preventDefault();
+            await adjuntar(file);
+        });
+    }
+
+    // ---- Arrastrar y soltar ----
+    function conectarArrastre() {
+        const pane = $('#pane-chat');
+        const capa = $('#chat-drop');
+        // dragenter/dragleave se disparan también al pasar por los hijos, así que
+        // se cuentan las entradas y salidas en vez de confiar en un solo evento.
+        let dentro = 0;
+
+        const traeArchivo = (e) =>
+            [...(e.dataTransfer?.types || [])].includes('Files');
+
+        pane.addEventListener('dragenter', (e) => {
+            if (!traeArchivo(e)) return;
+            e.preventDefault();
+            dentro++;
+            capa.hidden = false;
+        });
+        pane.addEventListener('dragover', (e) => {
+            if (!traeArchivo(e)) return;
+            e.preventDefault();             // sin esto el navegador no deja soltar
+            e.dataTransfer.dropEffect = 'copy';
+        });
+        pane.addEventListener('dragleave', () => {
+            if (dentro > 0) dentro--;
+            if (!dentro) capa.hidden = true;
+        });
+        pane.addEventListener('drop', async (e) => {
+            if (!traeArchivo(e)) return;
+            e.preventDefault();
+            dentro = 0;
+            capa.hidden = true;
+            const file = primeraImagen(e.dataTransfer);
+            if (!file) { cfg.toast('Eso no es una foto', true); return; }
+            await adjuntar(file);
+        });
+
+        // Soltar fuera del chat abriría la imagen y te sacaría de la app.
+        window.addEventListener('dragover', (e) => { if (traeArchivo(e)) e.preventDefault(); });
+        window.addEventListener('drop', (e) => { if (traeArchivo(e)) e.preventDefault(); });
     }
 
     /** Se llama al abrir un presupuesto: retoma la última conversación, si hay. */
