@@ -199,10 +199,26 @@ const Hablar = (() => {
             .flatMap(s => s.length <= 220 ? [s] : s.match(/.{1,220}(\s|$)/g).map(x => x.trim()));
     }
 
-    function avisar() { alCambiar?.(hablando); }
+    function avisar() { alCambiar?.({ hablando, pausado, id: idActual }); }
 
-    /** Lee el texto. Corta lo que estuviera diciendo antes. */
-    function decir(texto) {
+    // Estado de la lectura en curso.
+    //
+    // Se guardan las frases que faltan porque la pausa no se puede confiar al
+    // navegador solo: en Chrome de escritorio pause() anda, pero en Android
+    // suele ser un no-op o directamente cortar. Teniendo la cola acá, si el
+    // navegador no pausa de verdad se corta y al reanudar se sigue desde la
+    // frase que faltaba. Para el que escucha es lo mismo.
+    let pendientes = [];        // frases que todavía no se dijeron
+    let pausado = false;
+    let idActual = null;        // qué mensaje se está leyendo
+    let pausaNativa = false;    // ¿el navegador pausó de verdad?
+
+    /**
+     * Lee el texto. Corta lo que estuviera diciendo antes.
+     * `id` identifica de qué mensaje se trata, para que la pantalla sepa qué
+     * botón marcar como "sonando".
+     */
+    function decir(texto, id = null) {
         if (!soportado) return;
         callar();
 
@@ -210,10 +226,23 @@ const Hablar = (() => {
         if (!limpio) return;
         if (!vozElegida) elegirVoz();
 
-        const frases = enFrases(limpio);
+        idActual = id;
+        pendientes = enFrases(limpio);
+        arrancar();
+    }
+
+    /** Mete en la cola del navegador lo que quede por decir. */
+    function arrancar() {
+        if (!pendientes.length) { terminar(); return; }
+
         hablando = true;
+        pausado = false;
+        pausaNativa = false;
         avisar();
 
+        // Se copia la lista: cada frase se saca de `pendientes` cuando TERMINA
+        // de decirse, así lo que queda ahí es siempre lo que falta escuchar.
+        const frases = pendientes.slice();
         frases.forEach((frase, i) => {
             const u = new SpeechSynthesisUtterance(frase);
             if (vozElegida) { u.voice = vozElegida; u.lang = vozElegida.lang; }
@@ -222,34 +251,92 @@ const Hablar = (() => {
             // a escuchar no es necesariamente alguien apurado leyendo una app.
             u.rate = 0.95;
             u.pitch = 1;
-            if (i === frases.length - 1) {
-                u.onend = () => { hablando = false; pararMantenerVivo(); avisar(); };
-            }
-            u.onerror = () => { hablando = false; pararMantenerVivo(); avisar(); };
+            u.onend = () => {
+                // Si se cortó por una pausa, no se descuenta: esa frase se
+                // vuelve a decir entera al reanudar.
+                if (pausado) return;
+                pendientes.shift();
+                if (i === frases.length - 1) terminar();
+            };
+            u.onerror = () => { if (!pausado) terminar(); };
             speechSynthesis.speak(u);
         });
 
         arrancarMantenerVivo();
     }
 
-    /** Corta lo que esté diciendo. */
+    function terminar() {
+        hablando = false;
+        pausado = false;
+        pendientes = [];
+        idActual = null;
+        pararMantenerVivo();
+        avisar();
+    }
+
+    /** Corta del todo. Lo que faltaba se pierde. */
     function callar() {
         if (!soportado) return;
         speechSynthesis.cancel();
         pararMantenerVivo();
-        if (hablando) { hablando = false; avisar(); }
+        if (hablando || pausado) terminar();
+        else { pendientes = []; idActual = null; }
+    }
+
+    /**
+     * Pausa. Primero se le pide al navegador; si no pausó de verdad —Android
+     * seguido no lo hace— se corta y se recuerda por dónde iba.
+     */
+    function pausar() {
+        if (!soportado || !hablando || pausado) return;
+        pausado = true;
+        pararMantenerVivo();
+
+        speechSynthesis.pause();
+        pausaNativa = speechSynthesis.paused === true;
+        if (!pausaNativa) speechSynthesis.cancel();   // se sigue desde `pendientes`
+
+        avisar();
+    }
+
+    /** Sigue desde donde había quedado. */
+    function reanudar() {
+        if (!soportado || !pausado) return;
+        pausado = false;
+
+        if (pausaNativa) {
+            speechSynthesis.resume();
+            hablando = true;
+            arrancarMantenerVivo();
+            avisar();
+        } else {
+            arrancar();   // vuelve a encolar lo que faltaba
+        }
+    }
+
+    /** Pausa o sigue, según cómo esté. Es lo que llama el botón. */
+    function alternarPausa() {
+        if (pausado) reanudar();
+        else if (hablando) pausar();
     }
 
     const estaHablando = () => hablando;
+    const estaPausado  = () => pausado;
+    const leyendoId    = () => idActual;
 
-    /** La pantalla se entera de cuándo empieza y termina, para el botón. */
+    /** La pantalla se entera de cada cambio, para pintar los botones. */
     function alHablar(fn) { alCambiar = fn; }
 
     // Chrome de escritorio se "duerme" y deja de hablar pasados unos 15 segundos.
     // El truco conocido es pedirle resume() cada tanto mientras hay algo en cola.
+    //
+    // OJO: esto tiene que respetar la pausa. Antes de que existiera el botón no
+    // importaba, pero un resume() automático encima de una pausa a propósito la
+    // desharía sola a los diez segundos.
     function arrancarMantenerVivo() {
         pararMantenerVivo();
         mantenerVivo = setInterval(() => {
+            if (pausado) return;
             if (!speechSynthesis.speaking && !speechSynthesis.pending) {
                 pararMantenerVivo();
                 return;
@@ -274,7 +361,11 @@ const Hablar = (() => {
         speechSynthesis.speak(u);
     }
 
-    return { soportado, disponible, vozActual, decir, callar, estaHablando, alHablar, destrabar, paraLeer };
+    return {
+        soportado, disponible, vozActual, paraLeer, destrabar,
+        decir, callar, pausar, reanudar, alternarPausa,
+        estaHablando, estaPausado, leyendoId, alHablar,
+    };
 })();
 
 // Para poder probar paraLeer() desde node (ver hablar.test.mjs).
