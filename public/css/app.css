@@ -275,6 +275,13 @@ body {
 }
 .opt-field input:focus { outline: none; border-color: var(--primary); }
 
+/* La medida que se completó sola, leída del texto del item. Se distingue pero
+   sigue siendo un input común — se puede corregir como cualquier otro. */
+.opt-field input.opt-field-auto {
+    border-color: var(--primary);
+    background: color-mix(in srgb, var(--surface-2) 85%, var(--primary));
+}
+
 /* Selector de formato (segmentado grande) */
 .format-switch {
     display: flex;
@@ -683,8 +690,14 @@ body {
 .conv-target-unit { font-size: 16px; font-weight: 700; color: var(--text); }
 .conv-target-need { font-size: 11.5px; color: var(--text-dim); }
 
-.conv-measures { display: flex; gap: 9px; margin-top: 12px; }
-.conv-measures .opt-field { flex: 1; }
+.conv-measures { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 12px; }
+.conv-measures .opt-field { flex: 1; min-width: 100px; }
+.conv-measures-hint {
+    flex-basis: 100%;
+    margin: 2px 0 0;
+    font-size: 12px;
+    font-style: italic;
+}
 
 /* Cómo va a quedar, antes de aplicar nada */
 .conv-preview {
