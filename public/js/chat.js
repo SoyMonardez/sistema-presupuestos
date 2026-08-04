@@ -665,16 +665,30 @@ const Chat = (() => {
         });
     }
 
+    /** Solo http(s). Una URL de un buscador no debería traer otra cosa, pero
+     *  `javascript:` en un href es código que corre con un clic, y el título que
+     *  se ve al lado lo puede disfrazar de link normal. */
+    function urlSegura(url) {
+        try {
+            const u = new URL(String(url), location.origin);
+            return (u.protocol === 'http:' || u.protocol === 'https:') ? u.href : null;
+        } catch {
+            return null;
+        }
+    }
+
     function fuentes(lista) {
         const box = document.createElement('div');
         box.className = 'chat-sources';
         box.innerHTML = '<span class="chat-sources-label">Fuentes</span>';
         lista.forEach(s => {
+            const href = urlSegura(s.url);
+            if (!href) return;
             const a = document.createElement('a');
-            a.href = s.url;
+            a.href = href;
             a.target = '_blank';
             a.rel = 'noopener noreferrer';
-            a.textContent = s.title || s.url;
+            a.textContent = s.title || href;
             box.appendChild(a);
         });
         return box;

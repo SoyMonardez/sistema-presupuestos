@@ -23,6 +23,10 @@ const PYTHON = process.env.PYTHON_BIN || (process.platform === 'win32' ? 'python
 
 const ANCHO_MAX = Number(process.env.VISION_MAX_WIDTH) || 1600;
 
+// Achicar una foto son milisegundos; si pasa de esto es que se colgó. Sin techo,
+// la petición queda esperando para siempre a un proceso que no va a contestar.
+const TIMEOUT_MS = Number(process.env.SHRINK_TIMEOUT_MS) || 20_000;
+
 function runShrink(entrada, salida, anchoMax) {
     return new Promise((resolve, reject) => {
         let py;
@@ -33,19 +37,33 @@ function runShrink(entrada, salida, anchoMax) {
         } catch {
             return reject(new Error('No se pudo ejecutar Python'));
         }
-        let out = '', err = '';
+
+        let out = '', err = '', terminado = false;
+
+        const cerrar = (fn, valor) => {
+            if (terminado) return;
+            terminado = true;
+            clearTimeout(reloj);
+            fn(valor);
+        };
+
+        const reloj = setTimeout(() => {
+            py.kill('SIGKILL');
+            cerrar(reject, new Error('El redimensionador tardó demasiado'));
+        }, TIMEOUT_MS);
+
         py.stdout.on('data', d => { out += d; });
         py.stderr.on('data', d => { err += d; });
-        py.on('error', () => reject(new Error('No se pudo ejecutar Python')));
+        py.on('error', () => cerrar(reject, new Error('No se pudo ejecutar Python')));
         py.on('close', () => {
             const line = out.trim().split('\n').filter(Boolean).pop();
-            if (!line) return reject(new Error(err.slice(0, 200) || 'El redimensionador no devolvió nada'));
+            if (!line) return cerrar(reject, new Error(err.slice(0, 200) || 'El redimensionador no devolvió nada'));
             try {
                 const data = JSON.parse(line);
-                if (data.error) return reject(new Error(data.error));
-                resolve(data);
+                if (data.error) return cerrar(reject, new Error(data.error));
+                cerrar(resolve, data);
             } catch {
-                reject(new Error('Respuesta inválida del redimensionador'));
+                cerrar(reject, new Error('Respuesta inválida del redimensionador'));
             }
         });
     });
