@@ -8,7 +8,7 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "test": "node server/lib/verificar.test.mjs && node server/lib/simulate.test.mjs && node public/js/medidas.test.mjs"
+    "test": "node server/lib/verificar.test.mjs && node server/lib/simulate.test.mjs && node public/js/medidas.test.mjs && node public/js/hablar.test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",

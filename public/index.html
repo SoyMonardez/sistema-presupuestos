@@ -225,6 +225,9 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
                 </button>
                 <textarea id="chat-input" class="chat-input no-swipe scroll-suave" rows="1" placeholder="Escribile al asistente…"></textarea>
+                <button type="button" id="chat-mic" class="chat-attach chat-mic" aria-label="Hablar en vez de escribir" title="Hablar en vez de escribir">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
+                </button>
                 <button type="submit" id="chat-send" class="chat-send" aria-label="Enviar">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
                 </button>
@@ -256,6 +259,13 @@
                         </button>
                     </div>
                 </div>
+                <!-- Leer las respuestas en voz alta. Usa la voz del aparato, así
+                     que no cuesta nada ni necesita internet (ver js/hablar.js). -->
+                <button type="button" id="chat-speak" class="chat-speak" aria-pressed="false" title="Leer las respuestas en voz alta">
+                    <svg class="icono-voz-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>
+                    <svg class="icono-voz-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="22" y1="9" x2="16" y2="15"/><line x1="16" y1="9" x2="22" y2="15"/></svg>
+                    <span id="chat-speak-label">Voz</span>
+                </button>
             </div>
         </form>
     </div>
@@ -488,6 +498,8 @@
 <script src="js/chat.js"></script>
 <script src="js/voice.js"></script>
 <script src="js/pdf.js"></script>
+<!-- hablar.js va DESPUÉS de pdf.js: usa numeroALetras para leer los montos. -->
+<script src="js/hablar.js"></script>
 <script src="js/app.js"></script>
 <script>
 if ('serviceWorker' in navigator) {
