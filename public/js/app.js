@@ -834,16 +834,50 @@
             refreshConvertPreview();
             return;
         }
+
+        // El item casi siempre ya tiene la medida escrita ("platea 0.80m x 0.50m
+        // x 0.15m"): se lee de ahí en vez de pedírsela de nuevo. Solo aplica a un
+        // item puntual — en "convertir todo" cada uno trae su propio texto, y
+        // completar con el de uno solo sería inventarle la medida a los demás.
+        let autocompletado = null;
+        if (!convertScope?.all) {
+            const item = items[convertScope.index];
+            const texto = `${item?.name || ''}\n${item?.detail || ''}`;
+            const { valores, fuente } = Medidas.medidasPara(convertTarget.needs, texto);
+            if (Object.keys(valores).length) autocompletado = { valores, fuente };
+        }
+
         for (const m of convertTarget.needs) {
             const label = document.createElement('label');
             label.className = 'opt-field';
             label.innerHTML = `<span></span><input type="text" inputmode="decimal" placeholder="0" data-measure="${m}">`;
             label.querySelector('span').textContent = MEASURE_LABEL[m] || m;
-            label.querySelector('input').addEventListener('input', refreshConvertPreview);
+            const input = label.querySelector('input');
+            if (autocompletado?.valores[m] !== undefined) {
+                input.value = formatQty(autocompletado.valores[m]);
+                // Se distingue visualmente que vino solo, no porque haga falta
+                // confiar ciegamente: sigue siendo un input común, editable.
+                input.classList.add('opt-field-auto');
+            }
+            input.addEventListener('input', () => {
+                input.classList.remove('opt-field-auto');   // ya no es lo que se leyó, es lo que tipeó
+                refreshConvertPreview();
+            });
             box.appendChild(label);
         }
+
+        if (autocompletado) {
+            const hint = document.createElement('p');
+            hint.className = 'field-hint conv-measures-hint';
+            hint.textContent = `Tomado de la descripción ("${autocompletado.fuente}") — revisalo y corregilo si hace falta.`;
+            box.appendChild(hint);
+        }
+
         box.hidden = false;
-        requestAnimationFrame(() => box.querySelector('input')?.focus());
+        requestAnimationFrame(() => {
+            // Si ya se completó solo, no hace falta forzar el foco ni el teclado.
+            if (!autocompletado) box.querySelector('input')?.focus();
+        });
         refreshConvertPreview();
     }
 
