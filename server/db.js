@@ -76,10 +76,17 @@ CREATE TABLE IF NOT EXISTS business_settings (
 INSERT OR IGNORE INTO business_settings (id) VALUES (1);
 
 -- Chat por presupuesto, con varias conversaciones (estilo ChatGPT).
+--
+-- "mode" es el modo de la conversación: 'asistente' (charla y validar ideas),
+-- 'investigador' (investigar en internet) o 'presupuestador' (el único que
+-- propone ops/simulate — editar el presupuesto de verdad). El default es
+-- 'presupuestador' porque es el uso original y no queremos cambiarle el
+-- comportamiento a nadie que ya venía usando el chat.
 CREATE TABLE IF NOT EXISTS chat_conversations (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     budget_id  INTEGER NOT NULL REFERENCES budgets(id) ON DELETE CASCADE,
     title      TEXT NOT NULL DEFAULT '',
+    mode       TEXT NOT NULL DEFAULT 'presupuestador',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -117,6 +124,11 @@ addColumnIfMissing('budgets', 'client_address',  `client_address TEXT NOT NULL D
 addColumnIfMissing('budgets', 'client_cp',       `client_cp TEXT NOT NULL DEFAULT ''`);
 addColumnIfMissing('budgets', 'client_phone',    `client_phone TEXT NOT NULL DEFAULT ''`);
 addColumnIfMissing('budgets', 'client_email',    `client_email TEXT NOT NULL DEFAULT ''`);
+
+// Modo de la conversación: ver el comentario de la tabla más arriba. Las
+// conversaciones que ya existían quedan en 'presupuestador' (el default de la
+// columna), que es como se comportaban antes de que existieran los modos.
+addColumnIfMissing('chat_conversations', 'mode', `mode TEXT NOT NULL DEFAULT 'presupuestador'`);
 
 // Siembra el catálogo de unidades la primera vez. Después no se toca: si el
 // usuario borra una unidad de fábrica, es porque no la usa y no queremos que

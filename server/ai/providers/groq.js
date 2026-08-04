@@ -51,7 +51,11 @@ function toGroqMessages(system, messages) {
  * 'hidden' para que no pase, pero esto queda como red por si el próximo modelo
  * se comporta distinto: es barato y evita perder una lectura entera por un cerco.
  */
-function parseJsonFlexible(raw) {
+// `lax`: ver el comentario del mismo nombre en providers/claude.js — para el
+// chat, si ni sacando el cerco de código ni el objeto más externo hay JSON
+// válido, se toma el texto tal cual como "reply" en vez de perder la respuesta
+// entera. Las tareas con forma exacta (comando, visión) no lo activan.
+function parseJsonFlexible(raw, { lax = false } = {}) {
     let texto = String(raw).trim();
     texto = texto.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 
@@ -64,7 +68,12 @@ function parseJsonFlexible(raw) {
         // Último intento: quedarse con el objeto más externo que aparezca.
         const desde = texto.indexOf('{');
         const hasta = texto.lastIndexOf('}');
-        if (desde >= 0 && hasta > desde) return JSON.parse(texto.slice(desde, hasta + 1));
+        if (desde >= 0 && hasta > desde) {
+            try {
+                return JSON.parse(texto.slice(desde, hasta + 1));
+            } catch { /* cae al error de abajo */ }
+        }
+        if (lax) return { reply: texto };
         throw new Error('La IA no devolvió un JSON válido');
     }
 }
@@ -205,7 +214,7 @@ export async function completeStream(opts, onDelta) {
     }
 
     if (!completo) throw new Error('Respuesta vacía de Groq');
-    return wantsJson ? parseJsonFlexible(completo) : { text: completo };
+    return wantsJson ? parseJsonFlexible(completo, { lax: opts.laxFallback }) : { text: completo };
 }
 
 /**
@@ -223,7 +232,7 @@ function sinMargenParaContestar(data, err) {
     return choice?.finish_reason === 'length' && !choice?.message?.content;
 }
 
-export async function complete({ system, messages, schema, expectJson = false, maxTokens = 2000, temperature = 0.2, hasImages = false, effort = 'medium' }) {
+export async function complete({ system, messages, schema, expectJson = false, maxTokens = 2000, temperature = 0.2, hasImages = false, effort = 'medium', laxFallback = false }) {
     const wantsJson = Boolean(schema) || expectJson;
 
     const pedir = async (esfuerzo) => {
@@ -257,7 +266,7 @@ export async function complete({ system, messages, schema, expectJson = false, m
     const content = data.choices?.[0]?.message?.content;
     if (!content) throw new Error('Respuesta vacía de Groq');
 
-    return wantsJson ? parseJsonFlexible(content) : { text: content };
+    return wantsJson ? parseJsonFlexible(content, { lax: laxFallback }) : { text: content };
 }
 
 /**

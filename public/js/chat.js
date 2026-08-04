@@ -14,8 +14,51 @@ const Chat = (() => {
     let chatId = null;
     let enviando = false;
     let itemFoco = null;    // item señalado desde el atajo de la tarjeta
+    let modo = 'presupuestador';   // 'asistente' | 'investigador' | 'presupuestador'
 
     const $ = (sel) => document.querySelector(sel);
+
+    // Cada modo tiene su propia forma de responder (ver server/routes/chat.js:
+    // solo "presupuestador" toca el presupuesto de verdad). Esto es lo que
+    // cambia en pantalla al elegir uno: el placeholder y la pantalla vacía.
+    const MODOS = {
+        asistente: {
+            nombre: 'Asistente',
+            pensando: 'Pensando…',
+            placeholder: 'Contale qué estás pensando…',
+            titulo: 'Preguntale o pensá en voz alta',
+            sub: 'Para validar una idea, discutir un número o tener con qué responderle a quien te pregunte.',
+            chips: [
+                '¿Cuánto puedo cobrar por esto?',
+                '¿Me conviene hacerlo por mi cuenta o subcontratarlo?',
+                '¿Este número me deja ganancia?',
+            ],
+        },
+        investigador: {
+            nombre: 'Investigador',
+            pensando: 'Analizando el pedido…',
+            placeholder: 'Qué querés que investigue…',
+            titulo: 'Pedile que investigue',
+            sub: 'Precios de mercado, rendimientos, normativa municipal — busca en internet y cita la fuente.',
+            chips: [
+                '¿A cuánto está la bolsa de cemento hoy?',
+                '¿Cuánto rinde una bolsa de cal en revoque?',
+                '¿Esta obra necesita permiso municipal?',
+            ],
+        },
+        presupuestador: {
+            nombre: 'Presupuestador',
+            pensando: 'Armando los números…',
+            placeholder: 'Escribile al asistente…',
+            titulo: 'Preguntale lo que quieras',
+            sub: 'Conoce los items de este presupuesto, tu tarifario y lo que cobraste antes por trabajos parecidos.',
+            chips: [
+                '¿Cuánto me da si le bajo un 10%?',
+                'Pasá todo a metros cúbicos',
+                '¿Cuánto cobré antes por revoque?',
+            ],
+        },
+    };
 
     // "sí", "dale", "aplicalo"… El usuario responde en castellano, no toca botones.
     //
@@ -49,10 +92,6 @@ const Chat = (() => {
 
         $('#chat-input').addEventListener('input', autoGrow);
 
-        document.querySelectorAll('.chat-chip').forEach(chip => {
-            chip.addEventListener('click', () => enviar(chip.textContent));
-        });
-
         $('#chat-attach').addEventListener('click', () => $('#chat-file').click());
         $('#chat-file').addEventListener('change', async (e) => {
             const file = e.target.files[0];
@@ -68,18 +107,99 @@ const Chat = (() => {
         $('#chat-history').addEventListener('click', abrirListaChats);
         $('#chats-modal-close').addEventListener('click', () => Nav.popLayer());
         $('#chats-modal').addEventListener('click', (e) => { if (e.target.id === 'chats-modal') Nav.popLayer(); });
+
+        $('#chat-mode-trigger').addEventListener('click', () => {
+            menuModoAbierto() ? cerrarMenuModo() : abrirMenuModo();
+        });
+        document.querySelectorAll('.chat-mode-item').forEach(btn => {
+            btn.addEventListener('click', () => {
+                cerrarMenuModo();
+                cambiarModo(btn.dataset.mode);
+            });
+        });
+        // Tocar afuera cierra, como cualquier menú. En captura para enterarse
+        // antes de que el clic haga otra cosa.
+        document.addEventListener('click', (e) => {
+            if (!menuModoAbierto()) return;
+            if (e.target.closest('.chat-mode')) return;
+            cerrarMenuModo();
+        }, true);
+    }
+
+    // ================= Menú de modo =================
+    // Pasa por Nav igual que las modales: así Escape y el gesto de volver del
+    // celular lo cierran por el mismo camino que todo lo demás. Sin esto, Escape
+    // cerraría la capa de abajo dejando el menú abierto encima.
+    const menuModoAbierto = () => !$('#chat-mode-menu').hidden;
+
+    function abrirMenuModo() {
+        $('#chat-mode-menu').hidden = false;
+        $('#chat-mode-trigger').setAttribute('aria-expanded', 'true');
+        Nav.pushLayer('chat-mode-menu', ocultarMenuModo);
+    }
+    function ocultarMenuModo() {
+        $('#chat-mode-menu').hidden = true;
+        $('#chat-mode-trigger').setAttribute('aria-expanded', 'false');
+    }
+    function cerrarMenuModo() {
+        if (menuModoAbierto()) Nav.popLayer();
+    }
+
+    /** Cambia el modo activo: la pantalla al toque, el servidor si hay conversación creada. */
+    async function cambiarModo(nuevo) {
+        if (!MODOS[nuevo] || nuevo === modo) return;
+        modo = nuevo;
+        actualizarModoUI();
+        if (chatId) {
+            try {
+                await API.setChatMode(chatId, modo);
+            } catch (err) {
+                cfg.toast(err.message, true);
+            }
+        }
+    }
+
+    function actualizarModoUI() {
+        document.querySelectorAll('.chat-mode-item').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.mode === modo);
+        });
+        const info = MODOS[modo];
+        $('#chat-mode-label').textContent = info.nombre;
+        $('#chat-input').placeholder = info.placeholder;
+        // La pantalla vacía cambia de foco según el modo: no tiene sentido
+        // ofrecer "pasá todo a m³" en Investigador ni "¿a cuánto está el
+        // cemento?" en Presupuestador si lo que se busca es cargarlo, no leerlo.
+        if (!$('#chat-empty').hidden) pintarVacio();
+    }
+
+    function pintarVacio() {
+        const info = MODOS[modo];
+        $('#chat-empty-title').textContent = info.titulo;
+        $('#chat-empty-sub').textContent = info.sub;
+        const chips = $('#chat-empty-chips');
+        chips.innerHTML = '';
+        info.chips.forEach(texto => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'chat-chip';
+            btn.textContent = texto;
+            btn.addEventListener('click', () => enviar(texto));
+            chips.appendChild(btn);
+        });
     }
 
     function limpiarPantalla(titulo = 'Asistente') {
         chatId = null;
         opsPendientes = null;
         itemFoco = null;
+        modo = 'presupuestador';
         quitarAdjunto();
         $('#chat-messages').innerHTML = '';
         $('#chat-empty').hidden = false;
         $('#chat-title').textContent = titulo;
         $('#chat-input').value = '';
-        $('#chat-input').placeholder = 'Escribile al asistente…';
+        actualizarModoUI();
+        pintarVacio();
         autoGrow();
     }
 
@@ -123,7 +243,7 @@ const Chat = (() => {
                 fila.querySelector('.chat-row-date').textContent = formatDate(c.updated_at);
                 fila.querySelector('.chat-row-open').addEventListener('click', () => {
                     Nav.popLayer();
-                    cargarConversacion(c.id, c.title);
+                    cargarConversacion(c.id, c.title, c.mode);
                 });
                 fila.querySelector('.chat-row-del').addEventListener('click', async (e) => {
                     e.stopPropagation();
@@ -147,9 +267,10 @@ const Chat = (() => {
         }
     }
 
-    async function cargarConversacion(id, titulo) {
+    async function cargarConversacion(id, titulo, modoConv) {
         limpiarPantalla(titulo || 'Asistente');
         chatId = id;
+        if (MODOS[modoConv]) { modo = modoConv; actualizarModoUI(); }
         try {
             const { messages } = await API.chatMessages(id);
             if (messages.length) {
@@ -347,7 +468,7 @@ const Chat = (() => {
         if (!budgetId) return;
         try {
             const { chats } = await API.listChats(budgetId);
-            if (chats.length) await cargarConversacion(chats[0].id, chats[0].title);
+            if (chats.length) await cargarConversacion(chats[0].id, chats[0].title, chats[0].mode);
         } catch {
             // Sin historial se arranca de cero; no vale la pena molestarlo con esto.
         }
@@ -407,16 +528,16 @@ const Chat = (() => {
 
         enviando = true;
         $('#chat-send').disabled = true;
-        const pensando = pintarPensando();
+        let pensando = pintarEstado(MODOS[modo].pensando);
 
         try {
             if (!chatId) {
-                const chat = await API.createChat(cfg.getBudgetId());
+                const chat = await API.createChat(cfg.getBudgetId(), modo);
                 chatId = chat.id;
             }
 
             // Burbuja que se va llenando con lo que escribe el modelo. Aparece
-            // recién con el primer pedazo de texto, así los puntitos se ven
+            // recién con el primer pedazo de texto, así el indicador se ve
             // mientras piensa y no queda una burbuja vacía en el medio.
             let burbuja = null;
             let acumulado = '';
@@ -431,7 +552,23 @@ const Chat = (() => {
                 scrollAbajo();
             };
 
-            const out = await API.streamChatMessage(chatId, texto, itemFoco, onDelta, foto);
+            // Cuando sale a buscar a internet, lo que ya se había escrito era el
+            // "dame un segundo que busco": se descarta y en su lugar va el
+            // indicador. Si no, esa frase se queda quieta en pantalla y parece
+            // que terminó ahí — que es justo lo que confundía.
+            const onStatus = ({ fase, query }) => {
+                if (fase === 'buscando') {
+                    burbuja?.closest('.chat-msg')?.remove();
+                    burbuja = null;
+                    acumulado = '';
+                    pensando = reemplazarEstado(pensando, 'Buscando en internet…', query);
+                } else if (fase === 'redactando') {
+                    pensando = reemplazarEstado(pensando, 'Leyendo lo que encontré…');
+                }
+                scrollAbajo();
+            };
+
+            const out = await API.streamChatMessage(chatId, texto, itemFoco, onDelta, foto, onStatus);
             itemFoco = null;
             $('#chat-input').placeholder = 'Escribile al asistente…';
             pensando.remove();
@@ -460,13 +597,37 @@ const Chat = (() => {
         }
     }
 
-    function pintarPensando() {
+    /**
+     * El cartel de "estoy en esto": anillo girando + qué está haciendo.
+     * `extra` es el detalle chico de abajo (la consulta que fue a buscar).
+     */
+    function pintarEstado(fase, extra) {
         const el = document.createElement('div');
         el.className = 'chat-msg chat-msg-assistant';
-        el.innerHTML = `<div class="chat-bubble chat-thinking"><span></span><span></span><span></span></div>`;
+        el.innerHTML = `
+            <div class="chat-bubble chat-status">
+                <span class="chat-status-ring"></span>
+                <span class="chat-status-text">
+                    <span class="chat-status-fase"></span>
+                    <span class="chat-status-extra" hidden></span>
+                </span>
+            </div>`;
+        el.querySelector('.chat-status-fase').textContent = fase;
+        if (extra) {
+            const ex = el.querySelector('.chat-status-extra');
+            // textContent y no innerHTML: la consulta la escribe el modelo.
+            ex.textContent = `“${extra}”`;
+            ex.hidden = false;
+        }
         $('#chat-messages').appendChild(el);
         scrollAbajo();
         return el;
+    }
+
+    /** Cambia el cartel por otro, devolviendo el nuevo. */
+    function reemplazarEstado(anterior, fase, extra) {
+        anterior?.remove();
+        return pintarEstado(fase, extra);
     }
 
     function pintar(role, texto, data, { scroll = true } = {}) {
@@ -529,6 +690,29 @@ const Chat = (() => {
             wrap.appendChild(av);
         }
         if (data.sources?.length) wrap.appendChild(fuentes(data.sources));
+        if (data.sugerirPresupuestar) wrap.appendChild(botonArmarPresupuesto());
+    }
+
+    /**
+     * El botón que ofrece pasar de Asistente/Investigador a Presupuestador con
+     * lo que se habló. Un solo clic hace las dos cosas: cambia de modo (así el
+     * próximo mensaje ya lo contesta el modo que arma presupuestos) y manda el
+     * pedido de armarlo — no hace falta que él lo escriba de nuevo, ya está
+     * todo en el historial de esta misma conversación.
+     */
+    function botonArmarPresupuesto() {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-primary chat-card-switch';
+        btn.textContent = 'Armar presupuesto con esto →';
+        btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            btn.textContent = 'Pasando a Presupuestador…';
+            await cambiarModo('presupuestador');
+            await enviar('Armá el presupuesto con todo lo que hablamos hasta acá.');
+            btn.remove();
+        });
+        return btn;
     }
 
     // La tarjeta de simulación: números reales, y nada aplicado todavía.

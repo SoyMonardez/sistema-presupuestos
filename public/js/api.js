@@ -67,9 +67,10 @@ const API = {
     aiClientData(name)      { return this.request('/api/ai/client-data', { method: 'POST', body: JSON.stringify({ name }) }); },
     // ---- Chat del presupuesto ----
     listChats(budgetId)   { return this.request(`/api/budgets/${budgetId}/chats`); },
-    createChat(budgetId)  { return this.request(`/api/budgets/${budgetId}/chats`, { method: 'POST', body: JSON.stringify({}) }); },
+    createChat(budgetId, mode) { return this.request(`/api/budgets/${budgetId}/chats`, { method: 'POST', body: JSON.stringify({ mode }) }); },
     chatMessages(chatId)  { return this.request(`/api/chats/${chatId}/messages`); },
     deleteChat(chatId)    { return this.request(`/api/chats/${chatId}`, { method: 'DELETE' }); },
+    setChatMode(chatId, mode) { return this.request(`/api/chats/${chatId}`, { method: 'PATCH', body: JSON.stringify({ mode }) }); },
     sendChatMessage(chatId, text, itemNum) {
         return this.request(`/api/chats/${chatId}/messages`, {
             method: 'POST',
@@ -82,7 +83,7 @@ const API = {
      * de la respuesta a mano.
      * @returns el mismo objeto que sendChatMessage
      */
-    async streamChatMessage(chatId, text, itemNum, onDelta, image) {
+    async streamChatMessage(chatId, text, itemNum, onDelta, image, onStatus) {
         const res = await fetch(`/api/chats/${chatId}/messages/stream`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.getToken()}` },
@@ -122,6 +123,9 @@ const API = {
                 try { payload = JSON.parse(datos); } catch { continue; }
 
                 if (evento === 'delta') onDelta?.(payload.text);
+                // En qué anda: "buscando en internet", "redactando". Es lo que
+                // hace que una búsqueda de diez segundos no parezca un cuelgue.
+                else if (evento === 'status') onStatus?.(payload);
                 else if (evento === 'done') final = payload;
                 else if (evento === 'error') error = payload.error;
             }
