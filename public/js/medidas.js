@@ -62,7 +62,12 @@ const Medidas = (() => {
         }
 
         for (const { re, campo } of ETIQUETAS) {
-            const conValor = new RegExp(`${re.source}\\s*:?=?\\s*${NUM}`, 'i');
+            // El (?:…) no es decorativo: re.source es una alternación suelta
+            // ("espesor|espes\.?|…"), y pegarle el número al final sin agrupar
+            // hacía que el número quedara atado SOLO a la última alternativa. Con
+            // eso "espesor 15 cm" no se leía nunca — la única parte que andaba era
+            // la cadena de dimensiones ("0.80m x 0.50m x 0.15m").
+            const conValor = new RegExp(`(?:${re.source})\\s*:?=?\\s*${NUM}`, 'i');
             const m = t.match(conValor);
             if (!m) continue;
             const valor = aMetros(m[1], m[2]);
