@@ -78,7 +78,7 @@ export const supportsStream = true;
  * Igual que complete(), pero avisando el texto a medida que llega.
  * Solo se emiten los bloques de texto: el pensamiento no se muestra.
  */
-export async function completeStream({ system, messages, schema, expectJson = false, maxTokens = 16000, effort = 'medium' }, onDelta) {
+export async function completeStream({ system, messages, schema, expectJson = false, maxTokens = 16000, effort = 'medium', laxFallback = false }, onDelta) {
     const stream = getClient().messages.stream(buildRequest({ system, messages, schema, maxTokens, effort }));
 
     let completo = '';
@@ -94,14 +94,10 @@ export async function completeStream({ system, messages, schema, expectJson = fa
     if (!completo.trim()) throw new Error('Respuesta vacía de Claude');
 
     if (!schema && !expectJson) return { text: completo.trim() };
-    try {
-        return JSON.parse(stripCodeFence(completo.trim()));
-    } catch {
-        throw new Error('Claude devolvió un JSON inválido');
-    }
+    return parseJsonFlexible(completo, { lax: laxFallback });
 }
 
-export async function complete({ system, messages, schema, expectJson = false, maxTokens = 16000, effort = 'medium' }) {
+export async function complete({ system, messages, schema, expectJson = false, maxTokens = 16000, effort = 'medium', laxFallback = false }) {
     const request = buildRequest({ system, messages, schema, maxTokens, effort });
 
     const response = await getClient().messages.create(request);
@@ -116,18 +112,42 @@ export async function complete({ system, messages, schema, expectJson = false, m
     if (!text) throw new Error('Respuesta vacía de Claude');
 
     if (!schema && !expectJson) return { text };
-
-    try {
-        return JSON.parse(stripCodeFence(text));
-    } catch {
-        throw new Error('Claude devolvió un JSON inválido');
-    }
+    return parseJsonFlexible(text, { lax: laxFallback });
 }
 
 // Las tareas que piden JSON por prompt en vez de por schema (las operaciones de
-// edición — ver server/ai/schemas.js) pueden venir envueltas en ```json … ```.
-// Es barato desenvolverlo acá y evita toda una familia de fallas.
-function stripCodeFence(text) {
-    const fenced = text.match(/^```(?:json)?\s*\n([\s\S]*?)\n?```$/);
-    return fenced ? fenced[1].trim() : text;
+// edición — ver server/ai/schemas.js) a veces vienen envueltas en ```json … ```,
+// o con alguna palabra suelta antes o después a pesar de que el prompt pide
+// "SOLO un JSON". Es la misma red que ya tenía Groq (ver ese archivo) — acá
+// faltaba, y fue justo lo que rompió la segunda pasada de la búsqueda web: ese
+// mensaje de seguimiento no tiene el pedido de JSON tan a mano en el contexto
+// inmediato, y alcanza con que el modelo agregue una palabra de más para que un
+// JSON.parse directo reviente.
+//
+// `lax` es para el chat: probado en vivo, el modo Asistente (respuestas largas,
+// con negritas y viñetas) hace que Claude directamente se olvide del sobre JSON
+// y conteste en prosa suelta — pasó 3 de 3 veces con la misma pregunta. Ahí, en
+// vez de tirar la respuesta entera, se toma el texto tal cual como "reply": en
+// el chat todos los demás campos (ops, simulate, web_query) son opcionales, así
+// que perderlos es mucho más barato que perder la respuesta. Las tareas que sí
+// necesitan una forma exacta (comando, visión) NO pasan `lax`, y ahí un JSON
+// roto sigue siendo un error de verdad.
+function parseJsonFlexible(raw, { lax = false } = {}) {
+    let texto = String(raw).trim();
+    const cerco = texto.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (cerco) texto = cerco[1].trim();
+
+    try {
+        return JSON.parse(texto);
+    } catch {
+        const desde = texto.indexOf('{');
+        const hasta = texto.lastIndexOf('}');
+        if (desde >= 0 && hasta > desde) {
+            try {
+                return JSON.parse(texto.slice(desde, hasta + 1));
+            } catch { /* cae al error de abajo */ }
+        }
+        if (lax) return { reply: texto };
+        throw new Error('Claude devolvió un JSON inválido');
+    }
 }

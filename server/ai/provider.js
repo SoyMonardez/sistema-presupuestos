@@ -87,7 +87,7 @@ function resolveProvider(task) {
  * @param {boolean}  [opts.expectJson] - pedir JSON sin schema (lo describe el prompt)
  * @returns {Promise<object>} el JSON parseado, o { text } si no se pidió JSON
  */
-export async function complete({ task, system, messages, schema, expectJson, maxTokens, temperature, effort }) {
+export async function complete({ task, system, messages, schema, expectJson, maxTokens, temperature, effort, laxFallback }) {
     const provider = resolveProvider(task);
     const defaults = TASK_DEFAULTS[task] || {};
 
@@ -100,6 +100,7 @@ export async function complete({ task, system, messages, schema, expectJson, max
         schema,
         expectJson,
         hasImages,
+        laxFallback,
         maxTokens:   maxTokens   ?? defaults.maxTokens,
         temperature: temperature ?? defaults.temperature,
         effort:      effort      ?? defaults.effort,
@@ -112,7 +113,7 @@ export async function complete({ task, system, messages, schema, expectJson, max
  * soporta streaming, cae a la versión de siempre: el que llama recibe el
  * resultado igual, solo que de una sola vez.
  */
-export async function completeStream({ task, system, messages, schema, expectJson, maxTokens, temperature, effort }, onDelta) {
+export async function completeStream({ task, system, messages, schema, expectJson, maxTokens, temperature, effort, laxFallback }, onDelta) {
     const provider = resolveProvider(task);
     const defaults = TASK_DEFAULTS[task] || {};
 
@@ -121,6 +122,7 @@ export async function completeStream({ task, system, messages, schema, expectJso
         messages,
         schema,
         expectJson,
+        laxFallback,
         hasImages: messages.some(m => Array.isArray(m.content) && m.content.some(p => p.type === 'image')),
         maxTokens:   maxTokens   ?? defaults.maxTokens,
         temperature: temperature ?? defaults.temperature,

@@ -29,17 +29,132 @@ import { markupPromptBlock } from '../lib/markup.js';
 
 const router = Router();
 
-const CHAT_SYSTEM = `Sos el asistente de un presupuestista argentino de construcción y refacciones. Lo tuteás, hablás en rioplatense, y sos concreto: él está laburando, no quiere ensayos.
+// El chat tiene tres modos, elegibles desde la pantalla (pestañas arriba del
+// cuadro de texto). Antes era uno solo que trataba de charlar, investigar y
+// editar el presupuesto a la vez, y eso se notaba en el largo de la respuesta:
+// la regla de "1 a 4 oraciones" (pensada para editar) le quedaba corta a una
+// pregunta de fondo y larga a un simple "hola". Separado, cada modo calibra su
+// propio largo en vez de forzar el mismo molde para todo.
+//
+//   asistente     — conversar, validar ideas, dar una opinión que se sostenga.
+//   investigador  — lo mismo pero con el gatillo de "web_query" mucho más
+//                   sensible: para eso está.
+//   presupuestador — el único que manda "ops"/"simulate", es decir el único
+//                   que puede tocar el presupuesto de verdad.
+//
+// Solo "presupuestador" edita. Si en medio de una charla en otro modo queda
+// claro que hay que armar o ajustar algo, el modelo marca
+// "sugerir_presupuestar" y la pantalla le ofrece pasar de modo con un botón —
+// pasa a "presupuestador" y le pide que arme el presupuesto con lo que se
+// habló, que ya está en el historial de la misma conversación.
 
-Te paso el presupuesto que está armando (items numerados 1,2,3... como los ve en pantalla), su tarifario y, cuando hace falta, datos de sus presupuestos anteriores.
+const CONTEXTO_COMUN = `Te paso el presupuesto que está armando (items numerados 1,2,3... como los ve en pantalla), su tarifario y, cuando hace falta, datos de sus presupuestos anteriores y resultados de una búsqueda en internet.`;
+
+const CONTRATO_BASE = `IMPORTANTE: "reply" va SIEMPRE PRIMERO en el JSON. Se le va mostrando mientras lo escribís, así que si va al final lo deja esperando la pantalla en blanco.
+- "reply": tu respuesta en español, para mostrarle. Es lo único que él lee, así que tiene que entenderse sola.
+- "title": solo en tu PRIMERA respuesta de la conversación, 3 a 5 palabras que resuman de qué se trata ("Cuánto cobrar por la limpieza", "Rendimiento del cemento"). Sirve para reconocerla después en la lista.`;
+
+const WEB_QUERY_BLOCK = `"web_query" — cuando la respuesta depende de un dato de AHORA que vos no tenés con certeza, y que buscando se puede conseguir. No es solo precios:
+   Ej: "¿a cuánto está la bolsa de cemento?" → "precio bolsa cemento 50kg Argentina hoy"
+       "¿cuánto rinde una bolsa de cemento en un contrapiso?" → "rendimiento bolsa cemento 50kg contrapiso m2"
+       "¿esto necesita permiso municipal?" → "permiso municipal obra menor San Juan requisitos"
+       "¿conviene hormigón elaborado o hecho en obra para esto?" → "hormigón elaborado vs hecho en obra costo rendimiento Argentina"
+   Regla simple: si para responder bien tendrías que "googlearlo" antes de decirlo
+   con seguridad, USÁ ESTO. Poné "web_query" y un "reply" CORTO avisando que vas
+   a buscar — nada de "ops": te vuelvo a preguntar con los resultados y ahí armás
+   la respuesta de verdad.
+   No estimes de memoria y digas que buscaste: no buscaste. Y al revés: no
+   busques boludeces que ya sabés con seguridad (que 1 bolsa de cemento es 50kg,
+   por ejemplo) — la búsqueda tarda, y eso lo hace esperar para nada.
+
+   DECIR QUE VAS A BUSCAR ES MANDAR "web_query". No existe avisar con palabras.
+   Si tu "reply" dice "dejame buscar", "ya lo busco", "en un toque vuelvo con los
+   números" o cualquier cosa parecida, ESE MISMO mensaje TIENE que traer
+   "web_query". No hay una segunda vuelta: si no lo mandás, la búsqueda no pasa
+   nunca y él se queda esperando un dato que no va a llegar — y si te escribe de
+   nuevo, le volvés a prometer lo mismo. Es el mismo error que prometer "ops" con
+   palabras.
+   MAL:  {"reply":"Dejame chequear los precios de mercado y vuelvo con el desglose."}
+   BIEN: {"reply":"Dejame chequear los precios de mercado y vuelvo con el desglose.",
+          "web_query":"precio m2 mampostería ladrillo común revocada Argentina hoy"}`;
+
+const OPINION_BLOCK = `VALIDAR UNA IDEA O DAR UNA OPINIÓN — cuando pregunta si algo conviene, si un
+   número le cierra, si tal método es mejor que tal otro, o cualquier cosa que le
+   sirva para decidir (a él o a quien le pregunte a él, capo o cliente):
+   - Tomá posición. "Depende" sin explicar de qué depende no ayuda a nadie que
+     está por firmar un presupuesto. Si hay un mejor camino, decilo primero y
+     después el porqué.
+   - Apoyate en DATOS, no en impresión: su tarifario, lo que cobró antes, o una
+     "web_query" si hace falta un dato de mercado o técnico. Si opinás sin nada
+     de eso, aclarálo ("esto es mi impresión, no lo verifiqué").
+   - Si algo no le cierra un número (un presupuesto que da negativo, un margen
+     que desapareció, un precio que quedó muy por debajo de lo que cobra
+     siempre), decíselo aunque no te lo haya preguntado.`;
+
+const SUGERIR_PRESUPUESTAR_BLOCK = `"sugerir_presupuestar": true — cuando la charla llegó a un punto en que lo que
+   sigue es ARMAR o AJUSTAR el presupuesto de verdad (ya quedó claro qué hacer,
+   con qué, más o menos cuánto). En ESTE modo vos NO tocás el presupuesto — para
+   eso está el modo Presupuestador. Marcalo y decilo en el "reply" ("¿armamos el
+   presupuesto con esto?"): la pantalla le va a ofrecer pasar de modo con un
+   botón. No lo marques en cada mensaje, solo cuando de verdad ya hay con qué
+   armar algo.`;
+
+const ASISTENTE_SYSTEM = `Sos el asistente de un presupuestista argentino de construcción y refacciones. Lo tuteás y hablás en rioplatense. Tu trabajo en ESTE modo es CONVERSAR: ayudarlo a pensar, validar ideas, contestar dudas y darle una visión que se sostenga — incluso para cuando sea su papá, un socio o un cliente el que le pregunte algo y él necesite una respuesta sólida, no una improvisada.
+
+${CONTEXTO_COMUN}
+
+Devolvé SIEMPRE SOLO un JSON con esta forma:
+{"reply":"...","web_query":"...","sugerir_presupuestar":true}
+
+${CONTRATO_BASE}
+- "web_query" y "sugerir_presupuestar" son opcionales: mandalos solo cuando corresponda.
+- Este modo NO manda "ops" ni "simulate": acá no se edita el presupuesto, se conversa. Para tocarlo de verdad está el modo Presupuestador.
+
+LARGO DE LA RESPUESTA: no tiene un tamaño fijo. Un saludo o una confirmación se contestan en una línea; una pregunta de fondo ("¿me conviene tal cosa?") se merece los párrafos que hagan falta para explicarla bien. Lo que no va es alargar por alargar (relleno, repetir lo que ya dijo) ni cortar una respuesta que necesitaba más desarrollo.
+
+CUÁNDO USAR CADA CAMPO
+
+${WEB_QUERY_BLOCK}
+
+${OPINION_BLOCK}
+
+${SUGERIR_PRESUPUESTAR_BLOCK}
+
+Tenés a mano el presupuesto actual, el tarifario y lo que cobró antes: usalos siempre que la pregunta tenga que ver con plata. No contestes en abstracto pudiendo contestar con SUS números.`;
+
+const INVESTIGADOR_SYSTEM = `Sos el investigador de un presupuestista argentino de construcción y refacciones. Lo tuteás y hablás en rioplatense. Tu trabajo en ESTE modo es INVESTIGAR: buscar datos de mercado, técnicos o normativos que le hagan falta para decidir o para defender un número frente a un cliente o un municipio. No es charla general ni edición del presupuesto.
+
+${CONTEXTO_COMUN}
+
+Devolvé SIEMPRE SOLO un JSON con esta forma:
+{"reply":"...","web_query":"...","sugerir_presupuestar":true}
+
+${CONTRATO_BASE}
+- "web_query" y "sugerir_presupuestar" son opcionales.
+- Este modo NO manda "ops" ni "simulate": para eso está el modo Presupuestador. Si la investigación deja algo listo para cargar, marcá "sugerir_presupuestar" y decíselo.
+
+LARGO DE LA RESPUESTA: lo manda el tema, no una cantidad fija de oraciones. Una pregunta puntual de precio se contesta en una línea con el dato y la fecha. Una pregunta de fondo (comparar métodos, normativa, rendimientos) se contesta con la estructura que haga falta para que quede claro y accionable, con viñetas si ayuda. Siempre citá de dónde salió el dato y de qué fecha es: un número sin fuente no sirve para defender un presupuesto.
+
+CUÁNDO USAR CADA CAMPO
+
+${WEB_QUERY_BLOCK}
+En este modo la regla es más agresiva que en el resto: casi cualquier pregunta sobre precios, rendimientos, normativa o "qué conviene" es candidata a "web_query" primero. Preferí buscar y confirmar antes que contestar de memoria — es literalmente para lo que está este modo.
+
+${OPINION_BLOCK}
+
+${SUGERIR_PRESUPUESTAR_BLOCK}`;
+
+const PRESUPUESTADOR_SYSTEM = `Sos el asistente de un presupuestista argentino de construcción y refacciones. Lo tuteás, hablás en rioplatense, y sos concreto: él está laburando, no quiere ensayos. Tu trabajo en ESTE modo es ARMAR Y EDITAR el presupuesto — es el único de los tres modos que puede tocarlo de verdad.
+
+${CONTEXTO_COMUN}
 
 Devolvé SIEMPRE SOLO un JSON con esta forma:
 {"reply":"...","ops":[...],"simulate":{...},"web_query":"..."}
 
-- "reply": tu respuesta en español, para mostrarle. Es lo único que él lee, así que tiene que entenderse sola. Corta y al grano: 1 a 4 oraciones salvo que pida una explicación.
-  IMPORTANTE: poné "reply" SIEMPRE PRIMERO en el JSON. Se le va mostrando mientras lo escribís, así que si va al final lo deja esperando la pantalla en blanco.
+${CONTRATO_BASE}
 - "ops", "simulate" y "web_query" son opcionales: mandá solo el que corresponda, o ninguno si es pura charla.
-- "title": solo en tu PRIMERA respuesta de la conversación, 3 a 5 palabras que resuman de qué se trata ("Descuento del 10%", "Conversión a m³"). Sirve para que la reconozca después en la lista.
+
+LARGO DE LA RESPUESTA: corto y al grano, 1 a 4 oraciones salvo que te pida una explicación.
 
 CUÁNDO USAR CADA UNO
 
@@ -87,12 +202,7 @@ CUÁNDO USAR CADA UNO
    "quedaría así".
    ===================================================================
 
-3) "web_query" — cuando pregunta por precios de mercado ACTUALES que no están en su tarifario.
-   Ej: "¿a cuánto está la bolsa de cemento?" → "precio bolsa cemento 50kg Argentina hoy"
-   Poné la consulta y NADA más (sin "reply" largo, sin "ops"): te vuelvo a preguntar
-   con los resultados y ahí armás la respuesta o el presupuesto con esos números.
-   Si te pidió "precios actuales" o "precios de hoy", USÁ ESTO. No estimes de
-   memoria y digas que buscaste: no buscaste.
+3) ${WEB_QUERY_BLOCK}
 
 ======================= CÓMO SE ARMA UN PRESUPUESTO =======================
 Cuando te pide presupuestar un trabajo (no editar uno que ya existe), seguí este
@@ -168,6 +278,16 @@ REGLAS QUE NO SE ROMPEN
 - Nunca cambies nada sin que él confirme.
 - Para conversiones y descuentos NO calcules vos: usá "simulate" u "ops" y dejá que el sistema haga la aritmética.
 - Si te pide algo que no tiene que ver con presupuestos, contestá igual pero corto.`;
+
+const MODOS = {
+    asistente: ASISTENTE_SYSTEM,
+    investigador: INVESTIGADOR_SYSTEM,
+    presupuestador: PRESUPUESTADOR_SYSTEM,
+};
+
+function sistemaDelModo(modo) {
+    return MODOS[modo] || PRESUPUESTADOR_SYSTEM;
+}
 
 // ---------------------------------------------------------------------------
 // Consultas de apoyo
@@ -253,9 +373,21 @@ router.get('/budgets/:budgetId/chats', (req, res) => {
 router.post('/budgets/:budgetId/chats', (req, res) => {
     const budget = db.prepare('SELECT id FROM budgets WHERE id = ?').get(req.params.budgetId);
     if (!budget) return res.status(404).json({ error: 'No existe el presupuesto' });
-    const info = db.prepare('INSERT INTO chat_conversations (budget_id, title) VALUES (?, ?)')
-        .run(budget.id, String(req.body?.title || '').slice(0, 120));
+    const mode = MODOS[req.body?.mode] ? req.body.mode : 'presupuestador';
+    const info = db.prepare('INSERT INTO chat_conversations (budget_id, title, mode) VALUES (?, ?, ?)')
+        .run(budget.id, String(req.body?.title || '').slice(0, 120), mode);
     res.status(201).json(db.prepare('SELECT * FROM chat_conversations WHERE id = ?').get(info.lastInsertRowid));
+});
+
+// Cambiar el modo de una conversación existente: al tocar una de las pestañas
+// Asistente/Investigador/Presupuestador arriba del chat, o al aceptar el botón
+// "Armar presupuesto con esto" que ofrece "sugerir_presupuestar".
+router.patch('/chats/:id', (req, res) => {
+    const mode = req.body?.mode;
+    if (!MODOS[mode]) return res.status(400).json({ error: 'Modo inválido' });
+    const info = db.prepare('UPDATE chat_conversations SET mode = ? WHERE id = ?').run(mode, req.params.id);
+    if (!info.changes) return res.status(404).json({ error: 'No existe' });
+    res.json(db.prepare('SELECT * FROM chat_conversations WHERE id = ?').get(req.params.id));
 });
 
 router.get('/chats/:id/messages', (req, res) => {
@@ -298,8 +430,12 @@ const MAX_HISTORIAL = 14;   // mensajes previos que se le mandan al modelo
  *
  * `onDelta` es opcional: si viene, se le pasa el texto de la respuesta a medida
  * que lo escribe el modelo.
+ *
+ * `onStatus` también: avisa en qué anda ("buscando en internet") para que la
+ * pantalla lo muestre. Sin esto, una búsqueda web son diez segundos de nada en
+ * los que no se sabe si está trabajando o si se colgó.
  */
-async function responder(chat, texto, itemNum, onDelta, imagen) {
+async function responder(chat, texto, itemNum, onDelta, imagen, onStatus) {
     const items = itemsStmt.all(chat.budget_id);
     const catalog = loadUnitCatalog();
     const markup = loadSettings();
@@ -314,7 +450,7 @@ async function responder(chat, texto, itemNum, onDelta, imagen) {
         ...(itemNum ? { hablando_del_item: itemNum } : {}),
     };
 
-    const system = CHAT_SYSTEM
+    const system = sistemaDelModo(chat.mode)
         + unitsPromptBlock()
         + priceRefsPromptBlock()
         + markupPromptBlock(markup)
@@ -385,7 +521,7 @@ async function responder(chat, texto, itemNum, onDelta, imagen) {
     if (emitir) {
         try {
             respuesta = await conFoto(mensajes, (msgs) =>
-                completeStream({ task: tarea, system, messages: msgs, expectJson: true, maxTokens: TOKENS_SALIDA }, emitir));
+                completeStream({ task: tarea, system, messages: msgs, expectJson: true, maxTokens: TOKENS_SALIDA, laxFallback: true }, emitir));
         } catch (err) {
             // El streaming va sin modo JSON estricto para que sea streaming de
             // verdad (ver providers/groq.js), así que de vez en cuando el modelo
@@ -394,12 +530,12 @@ async function responder(chat, texto, itemNum, onDelta, imagen) {
             if (!/JSON/i.test(err.message)) throw err;
             console.warn('[chat] el stream no devolvió JSON válido, reintento sin streaming');
             respuesta = await conFoto(mensajes, (msgs) =>
-                complete({ task: tarea, system, messages: msgs, expectJson: true, maxTokens: TOKENS_SALIDA }));
+                complete({ task: tarea, system, messages: msgs, expectJson: true, maxTokens: TOKENS_SALIDA, laxFallback: true }));
             rehizo = true;   // lo que se mostró quedó viejo
         }
     } else {
         respuesta = await conFoto(mensajes, (msgs) =>
-            complete({ task: tarea, system, messages: msgs, expectJson: true, maxTokens: TOKENS_SALIDA }));
+            complete({ task: tarea, system, messages: msgs, expectJson: true, maxTokens: TOKENS_SALIDA, laxFallback: true }));
     }
 
     // Segunda pasada: pidió buscar precios en internet. Se hace la búsqueda y
@@ -417,8 +553,10 @@ async function responder(chat, texto, itemNum, onDelta, imagen) {
     let fuentes = [];
     if (respuesta.web_query) {
         try {
+            onStatus?.({ fase: 'buscando', query: String(respuesta.web_query).slice(0, 120) });
             const hallazgo = await webSearch(String(respuesta.web_query).slice(0, 300));
             fuentes = hallazgo.sources || [];
+            onStatus?.({ fase: 'redactando' });
             const seguimiento = [
                 ...mensajes,
                 { role: 'assistant', content: JSON.stringify({ reply: 'Buscando…' }) },
@@ -433,8 +571,8 @@ async function responder(chat, texto, itemNum, onDelta, imagen) {
             mostrado = '';
             rehizo = true;
             respuesta = emitir
-                ? await completeStream({ task: 'chat', system, messages: seguimiento, expectJson: true, maxTokens: TOKENS_SALIDA }, emitir)
-                : await complete({ task: 'chat', system, messages: seguimiento, expectJson: true, maxTokens: TOKENS_SALIDA });
+                ? await completeStream({ task: 'chat', system, messages: seguimiento, expectJson: true, maxTokens: TOKENS_SALIDA, laxFallback: true }, emitir)
+                : await complete({ task: 'chat', system, messages: seguimiento, expectJson: true, maxTokens: TOKENS_SALIDA, laxFallback: true });
         } catch (err) {
             console.warn('[chat] búsqueda web falló:', err.message);
             // Distinguir la cuota agotada de una falla cualquiera: si le decís
@@ -451,7 +589,20 @@ async function responder(chat, texto, itemNum, onDelta, imagen) {
         }
     }
 
+    // Solo el modo Presupuestador puede tocar el presupuesto. Si el modelo se
+    // equivocó de modo y mandó ops/simulate igual —el prompt se lo prohíbe,
+    // pero un prompt no es una garantía— se descartan acá, no en la confianza
+    // de que lo va a respetar. El "sugerir_presupuestar" sí es válido en los
+    // otros dos modos: es una propuesta de PASAR de modo, no un cambio.
+    if (chat.mode !== 'presupuestador') {
+        if (respuesta.ops || respuesta.simulate) {
+            console.warn(`[chat] modo "${chat.mode}" mandó ops/simulate, se descartan`);
+        }
+        respuesta = { ...respuesta, ops: undefined, simulate: undefined };
+    }
+
     const adjunto = {};
+    if (respuesta.sugerir_presupuestar) adjunto.sugerirPresupuestar = true;
 
     // La simulación la calcula el servidor: la IA solo dijo qué simular.
     let simulacionValida = false;
@@ -616,7 +767,12 @@ router.post('/chats/:id/messages/stream', async (req, res) => {
     };
 
     try {
-        const out = await responder(chat, pedido.texto, pedido.itemNum, (trozo) => enviar('delta', { text: trozo }), pedido.imagen);
+        const out = await responder(
+            chat, pedido.texto, pedido.itemNum,
+            (trozo) => enviar('delta', { text: trozo }),
+            pedido.imagen,
+            (estado) => enviar('status', estado),
+        );
         enviar('done', out);
     } catch (err) {
         // Que se haya ido no es un error digno de log: es lo normal cuando cierra
