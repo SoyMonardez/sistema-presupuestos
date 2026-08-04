@@ -59,5 +59,55 @@ const Voice = (() => {
 
     function isActive() { return active; }
 
-    return { isSupported, start, stop, isActive };
+    // ================= Vista previa en vivo =================
+    // Lo que se ve escribirse mientras habla.
+    //
+    // Esto NO reemplaza a Whisper: lo usa el reconocimiento del propio navegador,
+    // que es instantáneo y gratis pero entiende bastante peor el rioplatense y
+    // las palabras de obra. Sirve para ver que te está escuchando; el texto que
+    // queda es el de Whisper, que llega cuando se corta la grabación.
+    //
+    // Es "mejor esfuerzo" a propósito: corre en paralelo a la grabación y si el
+    // navegador no lo soporta, o falla, o pelea por el micrófono, no pasa nada —
+    // se sigue grabando igual y el resultado final es el mismo.
+    const Reconocimiento = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let recon = null;
+
+    function previewSupported() { return Boolean(Reconocimiento); }
+
+    function startPreview(onText) {
+        if (!Reconocimiento) return false;
+        try {
+            recon = new Reconocimiento();
+            recon.lang = 'es-AR';
+            recon.continuous = true;
+            recon.interimResults = true;      // lo que va entendiendo, sin esperar
+
+            recon.onresult = (e) => {
+                let texto = '';
+                for (let i = 0; i < e.results.length; i++) texto += e.results[i][0].transcript;
+                onText?.(texto.trim());
+            };
+            // Los errores se tragan: la vista previa es un lujo, no el resultado.
+            recon.onerror = () => {};
+            // Chrome lo corta solo tras un silencio; mientras se siga grabando,
+            // se vuelve a levantar para que el texto no deje de aparecer.
+            recon.onend = () => { if (active && recon) { try { recon.start(); } catch {} } };
+
+            recon.start();
+            return true;
+        } catch {
+            recon = null;
+            return false;
+        }
+    }
+
+    function stopPreview() {
+        if (!recon) return;
+        const r = recon;
+        recon = null;              // corta el auto-relevo del onend
+        try { r.stop(); } catch {}
+    }
+
+    return { isSupported, start, stop, isActive, previewSupported, startPreview, stopPreview };
 })();

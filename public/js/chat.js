@@ -110,11 +110,7 @@ const Chat = (() => {
 
         $('#chat-mic').addEventListener('click', dictar);
         $('#chat-speak').addEventListener('click', alternarVoz);
-        // El botón se prende y apaga solo mientras habla, para que sirva también
-        // como "callate" sin tener que apagar la función entera.
-        Hablar.alHablar((hablando) => {
-            $('#chat-speak').classList.toggle('leyendo', hablando);
-        });
+        Hablar.alHablar(refrescarBotonesLectura);
         aplicarVozUI();
 
         $('#chat-mode-trigger').addEventListener('click', () => {
@@ -143,8 +139,13 @@ const Chat = (() => {
     // Lo que entendió va al cuadro de texto y NO se manda solo, a propósito: si
     // escuchó mal una medida o un precio, se ve antes de mandarlo. Un número mal
     // entendido acá termina en un presupuesto.
+    // Lo que había escrito ANTES de empezar a dictar. La vista previa va
+    // reescribiendo el campo, así que hay que saber desde dónde pisar.
+    let textoPrevio = '';
+
     function dictar() {
         const btn = $('#chat-mic');
+        const el = $('#chat-input');
 
         if (Voice.isActive()) { Voice.stop(); return; }
 
@@ -156,6 +157,15 @@ const Chat = (() => {
         // Que no se pisen: si está leyendo una respuesta, primero se calla.
         Hablar.callar();
 
+        textoPrevio = el.value.trim();
+
+        // Escribe en el campo lo que se va entendiendo, sin pisar lo de antes.
+        const pintarParcial = (texto) => {
+            el.value = textoPrevio ? `${textoPrevio} ${texto}` : texto;
+            el.classList.add('dictando');
+            autoGrow();
+        };
+
         Voice.start({
             onTick(secs) {
                 btn.classList.add('grabando');
@@ -164,7 +174,12 @@ const Chat = (() => {
             async onStop(blob) {
                 btn.classList.remove('grabando');
                 btn.title = 'Hablar en vez de escribir';
+                Voice.stopPreview();
+                el.classList.remove('dictando');
+
                 if (blob.size < 1500) {
+                    el.value = textoPrevio;      // deshace la vista previa
+                    autoGrow();
                     cfg.toast('No llegué a escuchar nada, probá de nuevo', true);
                     return;
                 }
@@ -174,12 +189,14 @@ const Chat = (() => {
                     const { text } = await API.aiTranscribe(blob);
                     const limpio = String(text || '').trim();
                     if (!limpio) {
+                        el.value = textoPrevio;
+                        autoGrow();
                         cfg.toast('No se entendió lo que dijiste, probá de nuevo', true);
                         return;
                     }
-                    const el = $('#chat-input');
-                    // Se agrega a lo que ya haya escrito, no lo pisa.
-                    el.value = el.value.trim() ? `${el.value.trim()} ${limpio}` : limpio;
+                    // La versión de Whisper reemplaza a la vista previa: es la
+                    // que vale, sobre todo con los números.
+                    el.value = textoPrevio ? `${textoPrevio} ${limpio}` : limpio;
                     el.focus();
                     autoGrow();
                 } catch (err) {
@@ -192,9 +209,16 @@ const Chat = (() => {
             onError(msg) {
                 btn.classList.remove('grabando');
                 btn.title = 'Hablar en vez de escribir';
+                Voice.stopPreview();
+                el.classList.remove('dictando');
                 cfg.toast(msg, true);
             },
         });
+
+        // Se arranca después de start() para no pelear por el micrófono en el
+        // mismo instante. Si no anda, se sigue grabando igual: la vista previa
+        // es un extra, no el resultado.
+        Voice.startPreview(pintarParcial);
     }
 
     // ================= Que el asistente hable =================
@@ -204,17 +228,66 @@ const Chat = (() => {
     function aplicarVozUI() {
         const btn = $('#chat-speak');
         btn.setAttribute('aria-pressed', vozPrendida ? 'true' : 'false');
-        $('#chat-speak-label').textContent = vozPrendida ? 'Voz' : 'Voz';
         btn.title = vozPrendida
-            ? `Leyendo con ${Hablar.vozActual()}. Tocá para apagar (o para cortar lo que esté leyendo).`
-            : 'Leer las respuestas en voz alta';
+            ? `Lee sola cada respuesta, con ${Hablar.vozActual()}. Tocá para que deje de leer solas.`
+            : 'Leer sola cada respuesta nueva';
+    }
+
+    /**
+     * Pinta los botones de play/pausa de cada mensaje según lo que esté sonando.
+     * El botón del mensaje que suena muestra "pausa"; el resto, "play".
+     */
+    function refrescarBotonesLectura({ hablando, pausado, id }) {
+        document.querySelectorAll('.chat-play').forEach(b => {
+            const esEste = hablando && String(id) === b.dataset.msgId;
+            b.classList.toggle('sonando', esEste && !pausado);
+            b.classList.toggle('pausado', esEste && pausado);
+            b.title = !esEste ? 'Escuchar este mensaje'
+                : pausado ? 'Seguir escuchando'
+                : 'Pausar';
+        });
+        $('#chat-speak').classList.toggle('leyendo', hablando && !pausado);
+    }
+
+    /**
+     * El botón de cada mensaje. Tres estados en uno solo, que es lo que se
+     * espera de un play: si no suena, lo lee; si suena, pausa; si está pausado,
+     * sigue desde donde iba.
+     *
+     * Sirve también para los mensajes viejos, escritos cuando la voz estaba
+     * apagada: leer algo que ya está en pantalla no debería depender de haber
+     * tenido la voz prendida en el momento en que llegó.
+     */
+    let proximoIdMensaje = 1;
+
+    function botonEscuchar(wrap) {
+        const id = String(proximoIdMensaje++);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'chat-play';
+        btn.dataset.msgId = id;
+        btn.title = 'Escuchar este mensaje';
+        btn.setAttribute('aria-label', 'Escuchar este mensaje');
+        btn.innerHTML = `
+            <svg class="ic-play" viewBox="0 0 24 24" fill="currentColor" width="13" height="13"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+            <svg class="ic-pause" viewBox="0 0 24 24" fill="currentColor" width="13" height="13"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`;
+        btn.addEventListener('click', () => {
+            const suena = Hablar.estaHablando() && String(Hablar.leyendoId()) === id;
+            if (suena) { Hablar.alternarPausa(); return; }
+            // El texto se lee del DOM en el momento del clic, no al crear el
+            // botón: durante el streaming la burbuja todavía se está llenando.
+            const texto = wrap.querySelector('.chat-bubble')?.textContent || '';
+            Hablar.destrabar();
+            Hablar.decir(texto, id);
+        });
+        return { btn, id };
     }
 
     function alternarVoz() {
-        // Si está leyendo, el primer toque corta la lectura sin apagar la función:
-        // es lo que uno espera cuando ya escuchó lo que necesitaba.
-        if (vozPrendida && Hablar.estaHablando()) { Hablar.callar(); return; }
-
+        // Ojo: acá NO se corta la lectura. Antes este botón hacía las dos cosas
+        // (prender/apagar y callar), y por eso no se podía pausar: cada toque
+        // mataba la lectura. Ahora play/pausa vive en cada mensaje, y este botón
+        // solo decide si las respuestas nuevas se leen solas.
         vozPrendida = !vozPrendida;
         localStorage.setItem(VOZ_KEY, vozPrendida ? '1' : '0');
         if (vozPrendida) {
@@ -228,8 +301,8 @@ const Chat = (() => {
     }
 
     /** Lee una respuesta, si la voz está prendida. */
-    function leerSiCorresponde(texto) {
-        if (vozPrendida && texto) Hablar.decir(texto);
+    function leerSiCorresponde(texto, msgId) {
+        if (vozPrendida && texto) Hablar.decir(texto, msgId);
     }
 
     // ================= Menú de modo =================
@@ -689,21 +762,23 @@ const Chat = (() => {
             if (out.title) $('#chat-title').textContent = out.title;
 
             const { message } = out;
+            let wrap;
             if (burbuja && !out.replaced) {
                 // Ya está casi todo en pantalla: se completa el texto final y se
                 // le cuelgan las tarjetas, sin volver a dibujar el mensaje.
                 burbuja.textContent = message.content;
-                completar(burbuja.closest('.chat-msg'), message.data);
+                wrap = burbuja.closest('.chat-msg');
+                completar(wrap, message.data);
                 marcarPendientes(message.data);
             } else {
                 // No hubo streaming (o la respuesta se rehízo tras buscar en
                 // internet, y lo que se mostró quedó viejo): se pinta de nuevo.
                 burbuja?.closest('.chat-msg')?.remove();
-                pintar('assistant', message.content, message.data);
+                wrap = pintar('assistant', message.content, message.data);
             }
             // Recién cuando está el texto final: leer lo que se streameó a medias
             // sería empezar a hablar de algo que todavía puede cambiar.
-            leerSiCorresponde(message.content);
+            leerSiCorresponde(message.content, wrap?.dataset.msgId);
             scrollAbajo();
         } catch (err) {
             pensando.remove();
@@ -765,6 +840,14 @@ const Chat = (() => {
         burbuja.className = 'chat-bubble';
         burbuja.textContent = texto;
         wrap.appendChild(burbuja);
+
+        // Cada respuesta lleva su propio play. Así se puede escuchar un mensaje
+        // viejo, escrito cuando la voz estaba apagada, sin tener que prenderla.
+        if (role !== 'user') {
+            const { btn, id } = botonEscuchar(wrap);
+            wrap.dataset.msgId = id;
+            wrap.appendChild(btn);
+        }
 
         completar(wrap, data);
         if (role !== 'user') marcarPendientes(data);

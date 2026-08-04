@@ -1650,6 +1650,56 @@ body.modal-open { overflow: hidden; }
 }
 .chat-mic.transcribiendo { color: var(--primary); border-color: var(--primary); }
 
+/* Mientras dicta, el campo muestra en vivo lo que va entendiendo. Se marca
+   distinto porque ese texto todavía es provisorio: al soltar el micrófono lo
+   reemplaza la versión de Whisper, que es la que vale. */
+.chat-input.dictando {
+    border-color: var(--primary);
+    color: var(--text-dim);
+    font-style: italic;
+}
+
+/* ---- Play / pausa de cada respuesta ---- */
+/* Va en cada mensaje y no solo en la barra para poder escuchar uno viejo,
+   escrito cuando la voz estaba apagada. */
+.chat-play {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px; height: 26px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    color: var(--text-dim);
+    cursor: pointer;
+    opacity: .55;
+    -webkit-tap-highlight-color: transparent;
+    transition: opacity .15s, color .15s, border-color .15s;
+}
+.chat-play:hover { opacity: 1; color: var(--primary); border-color: var(--primary); }
+.chat-play .ic-pause { display: none; }
+/* Sonando: muestra pausa y late. Pausado: vuelve al play, sin latir. */
+.chat-play.sonando {
+    opacity: 1;
+    color: #fff;
+    background: var(--primary);
+    border-color: var(--primary);
+    animation: vozLatido 1.4s ease-in-out infinite;
+}
+.chat-play.sonando .ic-play  { display: none; }
+.chat-play.sonando .ic-pause { display: inline; }
+.chat-play.pausado {
+    opacity: 1;
+    color: var(--primary);
+    border-color: var(--primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .chat-play.sonando { animation: none; }
+}
+
 /* ---- Botón de voz (leer las respuestas) ---- */
 .chat-speak {
     display: inline-flex;
