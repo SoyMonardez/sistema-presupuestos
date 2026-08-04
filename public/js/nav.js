@@ -14,7 +14,21 @@ const Nav = (() => {
     // ======================= Capas =======================
     // Cada elemento: { name, onClose }. La última es la que está arriba de todo.
     const layers = [];
-    let ignoreNextPop = false;
+
+    // Cuántos popstate hay que descartar todavía porque ya los procesamos
+    // nosotros mismos, de forma sincrónica, en popLayer()/closeAll().
+    //
+    // Antes era un booleano, y con eso alcanzaba mientras solo hubiera UN cierre
+    // programático pendiente a la vez. El problema aparece si se llama a
+    // popLayer() dos veces seguidas antes de que el primer history.back() haya
+    // disparado su popstate (cerrar una modal y abrir otra en el mismo gesto,
+    // rapidísimo): los dos back() quedan en cola, pero cada popstate que llega
+    // consulta el mismo booleano — el primero lo apaga, y el segundo, que
+    // llega después, ya no tiene protección y termina cerrando lo que sea que
+    // esté abierto en ESE momento (una capa que ni pedimos cerrar). Con un
+    // contador, cada history.back() que pedimos programáticamente descuenta
+    // uno, sin importar cuántos queden pendientes ni en qué orden lleguen.
+    let ignorarPop = 0;
 
     /**
      * Registra una capa abierta. `onClose` corre cuando se cierra, venga del
@@ -25,10 +39,28 @@ const Nav = (() => {
         history.pushState({ navLayer: name, depth: layers.length }, '');
     }
 
-    /** Cierra la capa de arriba. Es lo que llaman los botones X y "Listo". */
+    /**
+     * Cierra la capa de arriba. Es lo que llaman los botones X y "Listo".
+     *
+     * `onClose` corre ACÁ MISMO, antes de que `history.back()` siquiera termine
+     * de pedirse — no se espera al popstate. Antes sí se esperaba, y eso dejaba
+     * una ventana abierta: bastaba con cerrar una modal y abrir otra en el mismo
+     * gesto (algo que varias pantallas hacen, ej. `Nav.popLayer(); abrirOtraCosa()`)
+     * para que el cierre, cuando por fin llegaba, pisara el estado de la modal
+     * nueva. Mismo patrón que ya usaba closeAll() para lo mismo, acá aplicado a
+     * una sola capa.
+     *
+     * El gesto de volver del celular sigue pasando por el popstate de abajo — ahí
+     * no hay forma de adelantarse, porque es el navegador el que avisa. Pero como
+     * el contador descarta el popstate que genera este history.back() (y cada
+     * uno de los que se acumulen si esto se llama varias veces seguidas), los dos
+     * caminos siguen sin poder desincronizarse: cierran la misma capa, una sola vez.
+     */
     function popLayer() {
         if (!layers.length) return;
-        history.back();   // dispara popstate, que corre el onClose
+        ignorarPop++;
+        layers.pop().onClose?.();
+        history.back();
     }
 
     /** ¿Hay una capa con este nombre abierta? */
@@ -36,17 +68,23 @@ const Nav = (() => {
         return layers.some(l => l.name === name);
     }
 
-    /** Cierra todas las capas sin dejar basura en el historial. */
+    /**
+     * Cierra todas las capas sin dejar basura en el historial.
+     *
+     * `history.go(-n)` salta las n entradas de una — los navegadores lo tratan
+     * como una sola navegación y disparan un único popstate al llegar, no uno
+     * por escalón. Por eso alcanza con descontar 1, no n.
+     */
     function closeAll() {
         const n = layers.length;
         if (!n) return;
-        ignoreNextPop = true;
+        ignorarPop++;
         while (layers.length) layers.pop().onClose?.();
         history.go(-n);
     }
 
     window.addEventListener('popstate', () => {
-        if (ignoreNextPop) { ignoreNextPop = false; return; }
+        if (ignorarPop > 0) { ignorarPop--; return; }
         const layer = layers.pop();
         if (layer) layer.onClose?.();
         // Si no quedaban capas, el navegador ya hizo lo suyo: en la vista raíz el

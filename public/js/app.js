@@ -716,8 +716,23 @@
     let convertOptions = [];    // destinos posibles según la unidad de origen
     let convertTarget = null;   // opción elegida
 
+    // Quién es "dueño" de convertScope/convertTarget en este momento.
+    //
+    // El cierre de una modal pasa por Nav.popLayer() -> history.back(), que es
+    // asincrónico: el onClose (hideConvertModal) recién corre cuando llega el
+    // popstate, no en el momento del clic. Si en el medio se abre otra conversión
+    // (otro item, o "convertir todo"), ese cierre atrasado terminaba pisando el
+    // estado de la apertura nueva y dejaba convertScope en null a mitad de un
+    // render — con un item convertido a medias mostrando las medidas del anterior.
+    //
+    // Cada apertura saca un número de sesión y se lo lleva pegado a su propio
+    // callback de cierre y a su propia promesa de red. Si cuando alguno de esos
+    // dos vuelve la sesión ya cambió, es que llegó tarde: no toca nada.
+    let convertSession = 0;
+
     async function openConvertModal(scope) {
         if (!items.length) { toast('No hay items para convertir', true); return; }
+        const session = ++convertSession;
         convertScope = scope;
         convertTarget = null;
         convertOptions = [];
@@ -744,12 +759,14 @@
 
         $('#convert-modal').hidden = false;
         document.body.classList.add('modal-open');
-        Nav.pushLayer('convert-modal', hideConvertModal);
+        Nav.pushLayer('convert-modal', () => hideConvertModal(session));
 
         try {
             const { options } = await API.unitPlan(from);
+            if (session !== convertSession) return;   // se cerró/reabrió mientras esperaba la red
             convertOptions = options || [];
         } catch {
+            if (session !== convertSession) return;
             convertOptions = [];
         }
         renderConvertTargets();
@@ -978,7 +995,10 @@
         $('#convert-apply').disabled = false;
     }
 
-    function hideConvertModal() {
+    function hideConvertModal(session) {
+        // Llegó tarde: ya hay una apertura más nueva dueña del estado. Tocarlo
+        // ahora sería el bug que esto arregla (ver el comentario en convertSession).
+        if (session !== convertSession) return;
         $('#convert-modal').hidden = true;
         document.body.classList.remove('modal-open');
         convertScope = null;
