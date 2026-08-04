@@ -132,22 +132,30 @@ const Chat = (() => {
     }
 
     // ================= Hablarle al asistente =================
-    // La transcripción la hace Whisper en el servidor, igual que el dictado de
-    // la pestaña de presupuesto: la Web Speech API del navegador entiende mucho
-    // peor el rioplatense y las palabras de obra ("contrapiso", "H21").
+    // Todo lo transcribe Whisper en el servidor, incluido lo que aparece
+    // mientras habla: el reconocimiento del navegador entiende mucho peor el
+    // rioplatense y las palabras de obra ("contrapiso", "H21"), y además hay
+    // navegadores que lo traen desactivado — en Brave, por ejemplo, no existe.
     //
-    // Lo que entendió va al cuadro de texto y NO se manda solo, a propósito: si
-    // escuchó mal una medida o un precio, se ve antes de mandarlo. Un número mal
-    // entendido acá termina en un presupuesto.
-    // Lo que había escrito ANTES de empezar a dictar. La vista previa va
-    // reescribiendo el campo, así que hay que saber desde dónde pisar.
-    let textoPrevio = '';
+    // El texto va apareciendo cada pocos segundos sobre el audio grabado hasta
+    // ese momento. Cuando deja de hablar, se manda solo.
+
+    const SILENCIO_MS = 3000;   // cuánto callado hace falta para dar por terminado
+
+    let textoPrevio = '';       // lo que ya estaba escrito antes de dictar
+    let parcialEnVuelo = false; // hay una transcripción parcial dando vueltas
+    let dictadoCancelado = false;
 
     function dictar() {
         const btn = $('#chat-mic');
         const el = $('#chat-input');
 
-        if (Voice.isActive()) { Voice.stop(); return; }
+        // Tocarlo mientras graba corta el dictado sin mandar nada.
+        if (Voice.isActive()) {
+            dictadoCancelado = true;
+            Voice.stop();
+            return;
+        }
 
         if (!Voice.isSupported()) {
             cfg.toast('Tu navegador no soporta grabar audio. Actualizalo.', true);
@@ -158,31 +166,67 @@ const Chat = (() => {
         Hablar.callar();
 
         textoPrevio = el.value.trim();
+        parcialEnVuelo = false;
+        dictadoCancelado = false;
 
-        // Escribe en el campo lo que se va entendiendo, sin pisar lo de antes.
-        const pintarParcial = (texto) => {
+        const escribir = (texto, enVivo) => {
             el.value = textoPrevio ? `${textoPrevio} ${texto}` : texto;
-            el.classList.add('dictando');
+            el.classList.toggle('dictando', Boolean(enVivo));
             autoGrow();
         };
 
         Voice.start({
+            silencioMs: SILENCIO_MS,
+
             onTick(secs) {
                 btn.classList.add('grabando');
-                btn.title = `Grabando ${secs}s — tocá para parar`;
+                btn.title = `Escuchando ${secs}s — tocá para cancelar`;
             },
+
+            // Cada par de segundos llega lo grabado hasta ahí y se transcribe,
+            // para que vea el texto mientras sigue hablando.
+            async onParcial(blob) {
+                // Una sola transcripción parcial a la vez: si la anterior no
+                // volvió, esta se saltea. Sirve para no encimarlas y para no
+                // gastar de más si la red viene lenta.
+                if (parcialEnVuelo || blob.size < 2000) return;
+                parcialEnVuelo = true;
+                try {
+                    const { text } = await API.aiTranscribe(blob);
+                    const limpio = String(text || '').trim();
+                    // Si mientras tanto se cortó, no se pisa el campo.
+                    if (limpio && Voice.isActive()) escribir(limpio, true);
+                } catch {
+                    // El parcial es un lujo: si falla, sigue la grabación y el
+                    // texto bueno llega igual al final.
+                } finally {
+                    parcialEnVuelo = false;
+                }
+            },
+
+            // Dejó de hablar: se corta la grabación y se manda.
+            onSilencio() {
+                Voice.stop();
+            },
+
             async onStop(blob) {
                 btn.classList.remove('grabando');
                 btn.title = 'Hablar en vez de escribir';
-                Voice.stopPreview();
                 el.classList.remove('dictando');
 
+                if (dictadoCancelado) {
+                    escribir('', false);
+                    el.value = textoPrevio;
+                    autoGrow();
+                    return;
+                }
                 if (blob.size < 1500) {
-                    el.value = textoPrevio;      // deshace la vista previa
+                    el.value = textoPrevio;
                     autoGrow();
                     cfg.toast('No llegué a escuchar nada, probá de nuevo', true);
                     return;
                 }
+
                 btn.classList.add('transcribiendo');
                 btn.disabled = true;
                 try {
@@ -194,11 +238,10 @@ const Chat = (() => {
                         cfg.toast('No se entendió lo que dijiste, probá de nuevo', true);
                         return;
                     }
-                    // La versión de Whisper reemplaza a la vista previa: es la
-                    // que vale, sobre todo con los números.
-                    el.value = textoPrevio ? `${textoPrevio} ${limpio}` : limpio;
-                    el.focus();
-                    autoGrow();
+                    // Esta es la transcripción del audio completo: reemplaza a
+                    // las parciales, que se hicieron con audio a medio grabar.
+                    escribir(limpio, false);
+                    enviar(el.value);
                 } catch (err) {
                     cfg.toast(err.message, true);
                 } finally {
@@ -206,19 +249,14 @@ const Chat = (() => {
                     btn.disabled = false;
                 }
             },
+
             onError(msg) {
                 btn.classList.remove('grabando');
                 btn.title = 'Hablar en vez de escribir';
-                Voice.stopPreview();
                 el.classList.remove('dictando');
                 cfg.toast(msg, true);
             },
         });
-
-        // Se arranca después de start() para no pelear por el micrófono en el
-        // mismo instante. Si no anda, se sigue grabando igual: la vista previa
-        // es un extra, no el resultado.
-        Voice.startPreview(pintarParcial);
     }
 
     // ================= Que el asistente hable =================
