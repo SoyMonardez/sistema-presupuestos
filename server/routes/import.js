@@ -16,6 +16,11 @@ const ALLOWED = ['pdf', 'xlsx', 'csv'];
 // Aceptamos cualquier content-type (el archivo viene como body crudo); validamos por ?ext=
 const rawFile = express.raw({ type: () => true, limit: '20mb' });
 
+// Un PDF raro puede hacer que pdfplumber se quede pensando para siempre. Sin
+// techo, esa petición queda colgada hasta que el usuario cierre la pestaña, y el
+// proceso sigue comiendo CPU en el container.
+const TIMEOUT_MS = Number(process.env.EXTRACT_TIMEOUT_MS) || 60_000;
+
 function runExtract(file, ext) {
     return new Promise((resolve, reject) => {
         let py;
@@ -28,15 +33,31 @@ function runExtract(file, ext) {
         } catch (e) {
             return reject(new Error('No se pudo ejecutar Python'));
         }
-        let out = '', err = '';
+
+        let out = '', err = '', terminado = false;
+
+        // Se resuelve una sola vez: si el timeout ya disparó, lo que llegue
+        // después del kill se ignora en vez de resolver una promesa ya rechazada.
+        const cerrar = (fn, valor) => {
+            if (terminado) return;
+            terminado = true;
+            clearTimeout(reloj);
+            fn(valor);
+        };
+
+        const reloj = setTimeout(() => {
+            py.kill('SIGKILL');
+            cerrar(reject, new Error('El lector tardó demasiado. Probá con un archivo más chico o más simple.'));
+        }, TIMEOUT_MS);
+
         py.stdout.on('data', d => { out += d; });
         py.stderr.on('data', d => { err += d; });
-        py.on('error', () => reject(new Error('No se pudo ejecutar Python (¿está instalado?)')));
+        py.on('error', () => cerrar(reject, new Error('No se pudo ejecutar Python (¿está instalado?)')));
         py.on('close', (code) => {
             const line = out.trim().split('\n').filter(Boolean).pop();
-            if (!line) return reject(new Error(err.slice(0, 300) || `El lector terminó con código ${code}`));
-            try { resolve(JSON.parse(line)); }
-            catch { reject(new Error('Respuesta inválida del lector de archivos')); }
+            if (!line) return cerrar(reject, new Error(err.slice(0, 300) || `El lector terminó con código ${code}`));
+            try { cerrar(resolve, JSON.parse(line)); }
+            catch { cerrar(reject, new Error('Respuesta inválida del lector de archivos')); }
         });
     });
 }

@@ -169,7 +169,14 @@
         show('prices');
         Nav.pushLayer('prices', async () => {
             clearTimeout(pricesTimer);
-            try { await API.savePrices(prices); } catch {}
+            // Si el último guardado falla hay que decirlo. Antes esto era un
+            // catch vacío: se perdían los precios que acababa de cargar y volvía
+            // a la lista convencido de que habían quedado guardados.
+            try {
+                await API.savePrices(prices);
+            } catch (err) {
+                toast('No se pudieron guardar los precios: ' + err.message, true);
+            }
             await openList();
         });
     }
@@ -451,11 +458,37 @@
         saveTimer = setTimeout(flushSave, 900);
     }
 
-    async function flushSave() {
+    // Un guardado a la vez.
+    //
+    // `saveItems` reemplaza la lista entera. Si se solapan dos guardados y llegan
+    // fuera de orden —cosa fácil si escribe mientras uno está en vuelo—, el viejo
+    // pisa al nuevo y se pierde la última edición sin que nada lo avise. Con esto,
+    // el que llega mientras hay uno corriendo espera a que termine y recién ahí
+    // manda el estado actual, que además ya incluye lo que se escribió mientras
+    // tanto.
+    let guardadoEnCurso = null;
+
+    function flushSave() {
         clearTimeout(saveTimer);
+        if (!currentBudget) return Promise.resolve();
+        guardadoEnCurso = (guardadoEnCurso || Promise.resolve())
+            .then(hacerGuardado, hacerGuardado);
+        return guardadoEnCurso;
+    }
+
+    async function hacerGuardado() {
+        // Se relee acá: entre que se encoló y le toca el turno, puede haber
+        // salido del presupuesto.
         if (!currentBudget) return;
+
+        // El id y los items se congelan ANTES del primer await. Leerlos después
+        // de una ida al servidor es pedir que, si mientras tanto abrió otro
+        // presupuesto, la segunda llamada escriba en el que no es.
+        const id = currentBudget.id;
+        const aGuardar = items.map(i => ({ ...i }));
+
         try {
-            await API.updateBudget(currentBudget.id, {
+            await API.updateBudget(id, {
                 name: $('#budget-name').value,
                 client: $('#budget-client').value,
                 notes: currentBudget.notes,
@@ -469,7 +502,7 @@
                 client_phone: $('#budget-client-phone').value,
                 client_email: $('#budget-client-email').value,
             });
-            await API.saveItems(currentBudget.id, items);
+            await API.saveItems(id, aGuardar);
             $('#save-status').textContent = 'Guardado';
             setTimeout(() => { if ($('#save-status').textContent === 'Guardado') $('#save-status').textContent = ''; }, 1500);
         } catch (err) {
@@ -1177,12 +1210,28 @@
             const d = describeOp(op);
             const row = document.createElement('div');
             row.className = 'draft-item';
+
+            // Estructura primero, contenido con textContent después.
+            //
+            // Acá antes se interpolaba d.title y d.detail directo en innerHTML, y
+            // eso era un XSS de verdad, no teórico: el nombre de un item no lo
+            // escribe solo el usuario — sale de un Excel o un PDF que le manda un
+            // municipio, o de una foto que interpreta la IA. Un nombre con
+            // <img src=x onerror=...> ejecutaba en el momento de mostrar el
+            // borrador, y desde ahí se lee el token de localStorage.
             row.innerHTML = `
                 <div class="draft-item-main">
-                    <span class="draft-op-tag ${d.tagClass}">${d.tag}</span>
-                    <span>${d.title}</span>
+                    <span class="draft-op-tag"></span>
+                    <span class="draft-item-title"></span>
                 </div>
-                <span class="draft-item-detail">${d.detail}</span>`;
+                <span class="draft-item-detail"></span>`;
+
+            const tag = row.querySelector('.draft-op-tag');
+            tag.classList.add(d.tagClass);          // clase controlada por nosotros, no por el dato
+            tag.textContent = d.tag;
+            row.querySelector('.draft-item-title').textContent = d.title;
+            row.querySelector('.draft-item-detail').textContent = d.detail;
+
             listEl.appendChild(row);
         }
         // Una hoja puede leerse bien y no proponer ningún cambio aplicable (todo
@@ -1198,19 +1247,35 @@
         draftOps = [];
     }
 
-    $('#btn-draft-cancel').addEventListener('click', hideDraft);
-    $('#btn-draft-add').addEventListener('click', () => {
-        // Orden importante para no romper la numeración: primero editar (índices intactos),
-        // después borrar (de mayor a menor num, así no se corren los índices todavía por procesar),
-        // recién al final agregar los nuevos.
-        draftOps.filter(o => o.action === 'update').forEach(op => {
+    /**
+     * Aplica operaciones sobre `items`, en el sitio.
+     *
+     * Esta función existía escrita tres veces —el panel de borrador, el chat, y
+     * applyOps() del servidor— con el mismo orden sutil copiado a mano. El orden
+     * no es un detalle: si se toca, hay que acordarse de los tres lugares, y el
+     * que se olvide corrompe presupuestos en silencio. Acá queda una sola vez
+     * para el cliente; el servidor tiene la suya en server/lib/ops.js porque
+     * trabaja sobre una copia, no sobre el estado de la pantalla.
+     *
+     * El orden: primero editar (los índices siguen valiendo), después borrar de
+     * mayor a menor (así los que faltan procesar no se corren), y recién al final
+     * agregar los nuevos (que no tienen número previo que respetar).
+     */
+    function aplicarOpsEnItems(ops) {
+        ops.filter(o => o.action === 'update').forEach(op => {
             const idx = op.num - 1;
             if (items[idx]) Object.assign(items[idx], op.fields);
         });
-        draftOps.filter(o => o.action === 'remove').map(o => o.num).sort((a, b) => b - a).forEach(num => {
-            items.splice(num - 1, 1);
-        });
-        draftOps.filter(o => o.action === 'add').forEach(op => items.push(op.item));
+        ops.filter(o => o.action === 'remove')
+            .map(o => o.num)
+            .sort((a, b) => b - a)
+            .forEach(num => items.splice(num - 1, 1));
+        ops.filter(o => o.action === 'add').forEach(op => items.push(op.item));
+    }
+
+    $('#btn-draft-cancel').addEventListener('click', hideDraft);
+    $('#btn-draft-add').addEventListener('click', () => {
+        aplicarOpsEnItems(draftOps);
         hideDraft();
         renderItems();
         scheduleSave();
@@ -1432,15 +1497,7 @@
             getBudgetId: () => currentBudget?.id,
             getItems: () => items,
             applyOps: (ops) => {
-                // Mismo orden que el panel de borrador: primero editar (los
-                // índices siguen intactos), después borrar de mayor a menor, y
-                // recién al final agregar.
-                ops.filter(o => o.action === 'update').forEach(op => {
-                    if (items[op.num - 1]) Object.assign(items[op.num - 1], op.fields);
-                });
-                ops.filter(o => o.action === 'remove').map(o => o.num).sort((a, b) => b - a)
-                    .forEach(num => items.splice(num - 1, 1));
-                ops.filter(o => o.action === 'add').forEach(op => items.push(op.item));
+                aplicarOpsEnItems(ops);
                 renderItems();
                 scheduleSave();
                 toast('Cambios aplicados');

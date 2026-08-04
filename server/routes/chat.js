@@ -601,16 +601,32 @@ router.post('/chats/:id/messages/stream', async (req, res) => {
         // suelta junto al final: el streaming deja de existir sin dar la cara.
         'X-Accel-Buffering': 'no',
     });
-    const enviar = (evento, dato) => res.write(`event: ${evento}\ndata: ${JSON.stringify(dato)}\n\n`);
+    // Si cierra la pestaña o se va del chat a mitad de respuesta, el socket queda
+    // muerto. Sin enterarnos, se seguía escribiendo sobre él y —peor— se seguía
+    // esperando al modelo, quemando cuota por una respuesta que ya no va a ver
+    // nadie. Con la cuota gratuita de Groq eso se paga en el mensaje siguiente.
+    let cortado = false;
+    res.on('close', () => {
+        if (!res.writableEnded) cortado = true;
+    });
+
+    const enviar = (evento, dato) => {
+        if (cortado) return;
+        res.write(`event: ${evento}\ndata: ${JSON.stringify(dato)}\n\n`);
+    };
 
     try {
         const out = await responder(chat, pedido.texto, pedido.itemNum, (trozo) => enviar('delta', { text: trozo }), pedido.imagen);
         enviar('done', out);
     } catch (err) {
-        console.error('[chat/stream]', err.message);
-        enviar('error', { error: mensajeDeError(err) });
+        // Que se haya ido no es un error digno de log: es lo normal cuando cierra
+        // la pestaña. Lo que sí conviene ver es cualquier otra falla.
+        if (!cortado) {
+            console.error('[chat/stream]', err.message);
+            enviar('error', { error: mensajeDeError(err) });
+        }
     } finally {
-        res.end();
+        if (!cortado) res.end();
     }
 });
 

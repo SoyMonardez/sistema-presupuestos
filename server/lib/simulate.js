@@ -45,7 +45,15 @@ export function simulate(items, spec, catalog) {
 
     const tipo = String(spec?.type || '').toLowerCase();
     const before = totalDe(base);
-    let after = base.map(i => ({ ...i }));
+
+    // Cada item se lleva anotado de qué posición original salió.
+    //
+    // Sin esto, traducir la simulación a operaciones era adivinar: se comparaba
+    // por posición (y al sacar un item las posiciones se corren, así que se
+    // generaban "cambios" comparando peras con manzanas) y se identificaba lo
+    // borrado por nombre (que se rompe si hay dos items con el mismo nombre).
+    // Con el origen anotado no hay que adivinar nada.
+    let after = base.map((i, idx) => ({ ...i, _idx: idx }));
     const lines = [];
     let label = '';
 
@@ -204,31 +212,36 @@ function linea(num, it, antes) {
 export function simulationToOps(items, resultado) {
     if (!resultado?.ok) return [];
     const ops = [];
-    const originales = items.length;
+    const finales = resultado.items || [];
 
-    // Los items que sobreviven y cambiaron → update; los que faltan → remove;
-    // los que aparecieron al final → add.
-    const finales = resultado.items;
-    for (let i = 0; i < Math.min(originales, finales.length); i++) {
-        const a = items[i], b = finales[i];
-        if (!b) continue;
+    // Cada item final sabe de qué posición original vino (_idx), así que no hay
+    // que deducir nada: lo que sigue estando y cambió es un update contra SU
+    // número, lo que no aparece es un remove, y lo que no tiene origen es nuevo.
+    const sobreviven = new Set();
+
+    for (const b of finales) {
+        if (b._idx === undefined) continue;      // item nuevo, se ve más abajo
+        sobreviven.add(b._idx);
+        const a = items[b._idx];
+        if (!a) continue;
+
         const fields = {};
-        if (qty(a.quantity)    !== qty(b.quantity))    fields.quantity   = qty(b.quantity);
-        if (String(a.unit)     !== String(b.unit))     fields.unit       = b.unit;
+        if (qty(a.quantity)     !== qty(b.quantity))     fields.quantity   = qty(b.quantity);
+        if (String(a.unit)      !== String(b.unit))      fields.unit       = b.unit;
         if (money(a.unit_price) !== money(b.unit_price)) fields.unit_price = money(b.unit_price);
-        if (Object.keys(fields).length) ops.push({ action: 'update', num: i + 1, fields });
+        if (Object.keys(fields).length) ops.push({ action: 'update', num: b._idx + 1, fields });
     }
-    if (finales.length < originales) {
-        // Se sacaron items: se identifican por diferencia de nombres.
-        const nombresFinales = finales.map(f => f.name);
-        for (let i = originales - 1; i >= 0; i--) {
-            const idx = nombresFinales.indexOf(items[i].name);
-            if (idx === -1) ops.push({ action: 'remove', num: i + 1 });
-            else nombresFinales.splice(idx, 1);
-        }
+
+    for (let i = 0; i < items.length; i++) {
+        if (!sobreviven.has(i)) ops.push({ action: 'remove', num: i + 1 });
     }
-    for (let i = originales; i < finales.length; i++) {
-        ops.push({ action: 'add', item: finales[i] });
+
+    for (const b of finales) {
+        if (b._idx !== undefined) continue;
+        // El _idx es de uso interno: no tiene por qué terminar guardado en la base.
+        const { _idx, ...item } = b;
+        ops.push({ action: 'add', item });
     }
+
     return ops;
 }
