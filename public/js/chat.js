@@ -108,6 +108,15 @@ const Chat = (() => {
         $('#chats-modal-close').addEventListener('click', () => Nav.popLayer());
         $('#chats-modal').addEventListener('click', (e) => { if (e.target.id === 'chats-modal') Nav.popLayer(); });
 
+        $('#chat-mic').addEventListener('click', dictar);
+        $('#chat-speak').addEventListener('click', alternarVoz);
+        // El botón se prende y apaga solo mientras habla, para que sirva también
+        // como "callate" sin tener que apagar la función entera.
+        Hablar.alHablar((hablando) => {
+            $('#chat-speak').classList.toggle('leyendo', hablando);
+        });
+        aplicarVozUI();
+
         $('#chat-mode-trigger').addEventListener('click', () => {
             menuModoAbierto() ? cerrarMenuModo() : abrirMenuModo();
         });
@@ -124,6 +133,103 @@ const Chat = (() => {
             if (e.target.closest('.chat-mode')) return;
             cerrarMenuModo();
         }, true);
+    }
+
+    // ================= Hablarle al asistente =================
+    // La transcripción la hace Whisper en el servidor, igual que el dictado de
+    // la pestaña de presupuesto: la Web Speech API del navegador entiende mucho
+    // peor el rioplatense y las palabras de obra ("contrapiso", "H21").
+    //
+    // Lo que entendió va al cuadro de texto y NO se manda solo, a propósito: si
+    // escuchó mal una medida o un precio, se ve antes de mandarlo. Un número mal
+    // entendido acá termina en un presupuesto.
+    function dictar() {
+        const btn = $('#chat-mic');
+
+        if (Voice.isActive()) { Voice.stop(); return; }
+
+        if (!Voice.isSupported()) {
+            cfg.toast('Tu navegador no soporta grabar audio. Actualizalo.', true);
+            return;
+        }
+
+        // Que no se pisen: si está leyendo una respuesta, primero se calla.
+        Hablar.callar();
+
+        Voice.start({
+            onTick(secs) {
+                btn.classList.add('grabando');
+                btn.title = `Grabando ${secs}s — tocá para parar`;
+            },
+            async onStop(blob) {
+                btn.classList.remove('grabando');
+                btn.title = 'Hablar en vez de escribir';
+                if (blob.size < 1500) {
+                    cfg.toast('No llegué a escuchar nada, probá de nuevo', true);
+                    return;
+                }
+                btn.classList.add('transcribiendo');
+                btn.disabled = true;
+                try {
+                    const { text } = await API.aiTranscribe(blob);
+                    const limpio = String(text || '').trim();
+                    if (!limpio) {
+                        cfg.toast('No se entendió lo que dijiste, probá de nuevo', true);
+                        return;
+                    }
+                    const el = $('#chat-input');
+                    // Se agrega a lo que ya haya escrito, no lo pisa.
+                    el.value = el.value.trim() ? `${el.value.trim()} ${limpio}` : limpio;
+                    el.focus();
+                    autoGrow();
+                } catch (err) {
+                    cfg.toast(err.message, true);
+                } finally {
+                    btn.classList.remove('transcribiendo');
+                    btn.disabled = false;
+                }
+            },
+            onError(msg) {
+                btn.classList.remove('grabando');
+                btn.title = 'Hablar en vez de escribir';
+                cfg.toast(msg, true);
+            },
+        });
+    }
+
+    // ================= Que el asistente hable =================
+    const VOZ_KEY = 'presu_voz';
+    let vozPrendida = localStorage.getItem(VOZ_KEY) === '1';
+
+    function aplicarVozUI() {
+        const btn = $('#chat-speak');
+        btn.setAttribute('aria-pressed', vozPrendida ? 'true' : 'false');
+        $('#chat-speak-label').textContent = vozPrendida ? 'Voz' : 'Voz';
+        btn.title = vozPrendida
+            ? `Leyendo con ${Hablar.vozActual()}. Tocá para apagar (o para cortar lo que esté leyendo).`
+            : 'Leer las respuestas en voz alta';
+    }
+
+    function alternarVoz() {
+        // Si está leyendo, el primer toque corta la lectura sin apagar la función:
+        // es lo que uno espera cuando ya escuchó lo que necesitaba.
+        if (vozPrendida && Hablar.estaHablando()) { Hablar.callar(); return; }
+
+        vozPrendida = !vozPrendida;
+        localStorage.setItem(VOZ_KEY, vozPrendida ? '1' : '0');
+        if (vozPrendida) {
+            // iOS exige que la primera locución salga de un toque del usuario.
+            Hablar.destrabar();
+            cfg.toast('Voy a leer las respuestas en voz alta');
+        } else {
+            Hablar.callar();
+        }
+        aplicarVozUI();
+    }
+
+    /** Lee una respuesta, si la voz está prendida. */
+    function leerSiCorresponde(texto) {
+        if (vozPrendida && texto) Hablar.decir(texto);
     }
 
     // ================= Menú de modo =================
@@ -193,6 +299,10 @@ const Chat = (() => {
         opsPendientes = null;
         itemFoco = null;
         modo = 'presupuestador';
+        // Cambiar de conversación o salir del presupuesto tiene que callar la
+        // voz: si no, sigue leyendo un mensaje que ya no está en pantalla.
+        Hablar.callar();
+        if (Voice.isActive()) Voice.stop();
         quitarAdjunto();
         $('#chat-messages').innerHTML = '';
         $('#chat-empty').hidden = false;
@@ -518,6 +628,10 @@ const Chat = (() => {
 
         // La foto se saca del estado ANTES de mandarla, así la barra queda libre
         // para escribir el siguiente mensaje mientras este viaja.
+        // Si estaba leyendo la respuesta anterior, se calla: ya está preguntando
+        // otra cosa y escuchar lo viejo mientras espera lo nuevo confunde.
+        Hablar.callar();
+
         const foto = adjunto;
         quitarAdjunto();
 
@@ -587,6 +701,9 @@ const Chat = (() => {
                 burbuja?.closest('.chat-msg')?.remove();
                 pintar('assistant', message.content, message.data);
             }
+            // Recién cuando está el texto final: leer lo que se streameó a medias
+            // sería empezar a hablar de algo que todavía puede cambiar.
+            leerSiCorresponde(message.content);
             scrollAbajo();
         } catch (err) {
             pensando.remove();
