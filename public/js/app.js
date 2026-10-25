@@ -131,6 +131,7 @@
         Entradas.ocultarPanel();
         Estado.render();
         show('editor');
+        ajustarTitulo();   // recién visible se puede medir
         tabs?.go(0, { animate: false });
         Chat.open();
 
@@ -141,6 +142,20 @@
             await openList();
         });
     }
+
+    // El título es un textarea que crece con el texto. Con el editor oculto
+    // scrollHeight da 0, por eso se ajusta recién después de mostrarlo.
+    function ajustarTitulo() {
+        const t = $('#budget-name');
+        t.style.height = 'auto';
+        t.style.height = t.scrollHeight + 'px';
+    }
+    $('#budget-name').addEventListener('input', ajustarTitulo);
+    window.addEventListener('resize', ajustarTitulo);
+    // Un nombre es una sola línea lógica: Enter confirma en vez de meter un salto.
+    $('#budget-name').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
+    });
 
     // La flecha de volver y el gesto del celular hacen exactamente lo mismo.
     $('#btn-back').addEventListener('click', () => Nav.popLayer());
