@@ -330,7 +330,8 @@
             onChange: (i) => {
                 // El total no aporta nada en la pestaña del asistente y ahí el
                 // espacio vertical se necesita para la conversación.
-                $('#view-editor').querySelector('.totalbar').hidden = (i === 1);
+                // En escritorio el chat no le quita el lugar: va en su propio panel.
+                $('#view-editor').querySelector('.totalbar').hidden = (i === 1) && !Nav.esEscritorio();
             },
         });
 

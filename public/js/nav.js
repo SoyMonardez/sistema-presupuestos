@@ -197,6 +197,10 @@ const Nav = (() => {
     // Las pestañas NO empujan historial a propósito: en las apps con barra
     // inferior, el gesto de volver sale de la pantalla, no recorre las pestañas.
 
+    // En escritorio el presupuesto y el panel de al lado (asistente o PDF) se ven
+    // a la vez, así que "Presupuesto" no es una pestaña que se elija: siempre está.
+    const escritorio = window.matchMedia('(min-width: 1200px)');
+
     function setupTabs({ track, buttons, onChange }) {
         let index = 0;
         let count = buttons.length;
@@ -209,6 +213,8 @@ const Nav = (() => {
 
         function go(next, { animate = true } = {}) {
             index = Math.max(0, Math.min(count - 1, next));
+            // Sin esto el panel de al lado quedaría vacío al "volver" al presupuesto.
+            if (escritorio.matches && index === 0) index = Math.min(1, count - 1);
             track.style.transition = animate ? 'transform .26s cubic-bezier(.32,.72,0,1)' : 'none';
             track.style.transform = `translate3d(${-index * 100}%, 0, 0)`;
             buttons.forEach((b, i) => {
@@ -216,7 +222,10 @@ const Nav = (() => {
                 b.setAttribute('aria-selected', i === index ? 'true' : 'false');
             });
             // Solo la pestaña visible es alcanzable con el teclado o el lector.
-            [...track.children].forEach((pane, i) => pane.setAttribute('aria-hidden', i === index ? 'false' : 'true'));
+            [...track.children].forEach((pane, i) => {
+                const visible = i === index || (escritorio.matches && i === 0);
+                pane.setAttribute('aria-hidden', visible ? 'false' : 'true');
+            });
             onChange?.(index);
         }
 
@@ -226,7 +235,7 @@ const Nav = (() => {
         // El bloqueo de eje es lo que evita que el swipe pelee con el scroll
         // vertical de la lista de items: el primer movimiento decide quién manda.
         track.addEventListener('touchstart', (e) => {
-            if (e.touches.length !== 1) return;
+            if (e.touches.length !== 1 || escritorio.matches) return;
             // Arrancar el gesto encima de un campo de texto molesta al escribir.
             if (e.target.closest('input, textarea, select, .no-swipe')) return;
             const t = e.touches[0];
@@ -277,6 +286,8 @@ const Nav = (() => {
         track.addEventListener('touchcancel', endDrag, { passive: true });
 
         go(0, { animate: false });
+        // Al achicar o agrandar la ventana cambia qué pestañas existen.
+        escritorio.addEventListener('change', () => go(index, { animate: false }));
 
         return {
             go,
@@ -285,5 +296,5 @@ const Nav = (() => {
         };
     }
 
-    return { pushLayer, popLayer, hasLayer, closeAll, setupTabs };
+    return { pushLayer, popLayer, hasLayer, closeAll, setupTabs, esEscritorio: () => escritorio.matches };
 })();

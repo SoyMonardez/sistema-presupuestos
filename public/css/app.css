@@ -1833,3 +1833,256 @@ body.modal-open { overflow: hidden; }
     }
     .modal-head, .modal-done, .sheet-grip { flex: 0 0 auto; }
 }
+
+/* Los títulos de columna de los items solo existen en escritorio. */
+.items-head { display: none; }
+
+/* ===================================================================
+   ESCRITORIO (≥ 1200px)
+
+   Todo el rediseño vive acá adentro, así que el celular y la tablet no
+   cambian en nada. La idea: aprovechar el ancho en vez de estirar la columna
+   del celular.
+     · Lista: grilla de tarjetas y "Nuevo presupuesto" con nombre, en el encabezado.
+     · Editor: el presupuesto a la izquierda con los items como filas de tabla,
+       y a la derecha, siempre a la vista, el asistente o el PDF.
+   =================================================================== */
+@media (min-width: 1200px) {
+    :root { --lateral: clamp(380px, 30vw, 480px); }
+
+    /* ---------- Lista de presupuestos ---------- */
+    #view-list { max-width: 1160px; padding: 32px 32px 60px; position: relative; }
+    #view-list .topbar { margin-bottom: 26px; padding-right: 230px; }
+    #view-list .topbar h1 { font-size: 28px; }
+    .budget-list {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(440px, 1fr));
+        gap: 16px;
+    }
+    .budget-card { padding: 20px; transition: border-color .15s, box-shadow .15s, transform .15s; }
+    .budget-card:hover { box-shadow: var(--shadow); transform: translateY(-1px); }
+    .budget-card-name { font-size: 18px; }
+    /* El botón de "+" deja de flotar abajo a la derecha: acá lo que corresponde
+       es un botón con nombre al lado del título. */
+    .fab {
+        position: absolute;
+        top: 32px;
+        right: 32px;
+        bottom: auto;
+        width: auto;
+        height: 44px;
+        padding: 0 18px 0 14px;
+        gap: 8px;
+        border-radius: var(--radius);
+        box-shadow: none;
+        font-family: inherit;
+        font-size: 15px;
+        font-weight: 600;
+    }
+    .fab svg { width: 20px; height: 20px; }
+    .fab::after { content: 'Nuevo presupuesto'; }
+    .fab:hover { background: var(--primary-h); }
+
+    /* ---------- Precios base ---------- */
+    #view-prices { max-width: 960px; padding-top: 32px; }
+    #view-prices .markup-box { margin: 0 0 12px; }
+    /* Tarifario como tabla, igual que los items del presupuesto. */
+    .prices-header, .price-row { grid-template-columns: minmax(0, 1fr) 110px 160px 40px; }
+    .prices-header {
+        display: grid;
+        gap: 8px;
+        padding: 6px 12px;
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .05em;
+        color: var(--text-dim);
+    }
+    #prices-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+    .price-row {
+        gap: 8px;
+        padding: 8px 12px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+    }
+    .price-row:hover { border-color: var(--text-dim); }
+    .price-row input {
+        background: var(--surface-2);
+        border-radius: 10px;
+        padding: 10px 12px;
+        font-family: inherit;
+    }
+    .price-row .p-price { font-weight: 700; }
+    .price-row .item-remove {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 36px;
+        height: 36px;
+        border: none;
+        background: transparent;
+        color: var(--text-dim);
+        border-radius: 9px;
+        cursor: pointer;
+    }
+    .price-row .item-remove:hover { color: var(--red); background: rgba(232, 93, 93, .12); }
+
+    /* ---------- Editor ---------- */
+    .view-tabbed {
+        max-width: none;
+        margin: 0;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) var(--lateral);
+        grid-template-rows: auto minmax(0, 1fr) auto;
+    }
+    /* El viewport y el track dejan de ser cajas: sus pestañas pasan a ser
+       celdas de la grilla del editor. */
+    .tab-viewport, .tab-track { display: contents; }
+
+    .view-tabbed .topbar {
+        grid-column: 1;
+        grid-row: 1;
+        padding: 12px 28px;
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
+    }
+    .view-tabbed .topbar .save-status { text-align: left; padding-left: 8px; }
+
+    #pane-budget {
+        grid-column: 1;
+        grid-row: 2;
+        padding: 26px max(28px, calc((100% - 960px) / 2)) 36px;
+    }
+    .input-title { font-size: 26px; padding: 16px 18px; }
+
+    /* Panel de al lado: el asistente o el PDF, el que se elija arriba. */
+    #pane-chat, #pane-pdf {
+        grid-column: 2;
+        grid-row: 2 / 4;
+        background: var(--surface);
+        border-left: 1px solid var(--border);
+    }
+    #pane-pdf { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+    #pane-chat[aria-hidden="true"], #pane-pdf[aria-hidden="true"] { display: none; }
+
+    /* Las pestañas pasan a ser el selector del panel, arriba a la derecha. */
+    .tabbar {
+        grid-column: 2;
+        grid-row: 1;
+        align-items: center;
+        gap: 6px;
+        padding: 9px 14px;
+        background: var(--surface);
+        border-top: none;
+        border-bottom: 1px solid var(--border);
+        border-left: 1px solid var(--border);
+    }
+    .tab-btn[data-tab="0"] { display: none; }
+    .tab-btn {
+        flex-direction: row;
+        gap: 8px;
+        min-height: 38px;
+        padding: 0 12px;
+        border-radius: 10px;
+        font-size: 14px;
+    }
+    .tab-btn:hover { background: var(--surface-2); color: var(--text); }
+    .tab-btn.active { background: rgba(37, 99, 235, .1); }
+    :root[data-theme="dark"] .tab-btn.active { background: rgba(91, 140, 255, .16); }
+    .tab-btn.active::before { display: none; }
+    .tab-btn.active svg { transform: none; }
+    .tab-btn svg { width: 18px; height: 18px; }
+
+    .view-tabbed .totalbar {
+        grid-column: 1;
+        grid-row: 3;
+        padding: 12px 28px;
+    }
+    .view-tabbed .totalbar .total-amount { font-size: 26px; }
+
+    /* Herramientas de IA: una fila de botones con ícono al lado del texto. */
+    .ai-bar { gap: 10px; margin: 14px 0 6px; }
+    .tool-btn {
+        flex: 0 0 auto;
+        flex-direction: row;
+        gap: 9px;
+        padding: 10px 16px;
+        font-size: 14px;
+        cursor: pointer;
+    }
+    .tool-btn:hover { border-color: var(--primary); }
+
+    /* ---------- Items como filas de tabla ---------- */
+    .items-head,
+    .item-card {
+        --cols: 34px minmax(0, 1fr) 80px 92px 120px 150px 76px 36px;
+    }
+    .items-head {
+        display: grid;
+        grid-template-columns: var(--cols);
+        gap: 8px;
+        padding: 0 10px 6px;
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .05em;
+        color: var(--text-dim);
+    }
+    .items-head .ih-sub { text-align: right; }
+
+    .items-list { gap: 6px; }
+    .item-card {
+        display: grid;
+        grid-template-columns: var(--cols);
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+        border-radius: 12px;
+        transition: border-color .15s;
+    }
+    .item-card:hover { border-color: var(--text-dim); }
+    /* Los tres bloques de la tarjeta del celular se desarman para que sus
+       piezas queden como celdas de una misma fila. */
+    .ic-top, .ic-fields, .ic-foot { display: contents; }
+    .item-card > * , .ic-top > *, .ic-fields > *, .ic-foot > * { grid-row: 1; }
+    .ic-num       { grid-column: 1; margin: 0; }
+    .ic-desc      { grid-column: 2; padding: 9px 12px; font-size: 15px; }
+    .ic-desc-text { -webkit-line-clamp: 2; }
+    .ic-fields .ic-field:nth-child(1) { grid-column: 3; }
+    .ic-fields .ic-field:nth-child(2) { grid-column: 4; }
+    .ic-fields .ic-field:nth-child(3) { grid-column: 5; }
+    .ic-subtotal  { grid-column: 6; }
+    .ic-foot-btns { grid-column: 7; flex-wrap: nowrap; justify-content: flex-end; gap: 4px; }
+    .ic-remove    { grid-column: 8; margin: 0; }
+
+    /* El título de cada campo lo da la fila de encabezados de arriba. */
+    .ic-field > span {
+        position: absolute;
+        width: 1px; height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+    }
+    .ic-field { flex: none; }
+    .ic-field input, .ic-field .f-unit { padding: 9px 11px; font-size: 15px; min-height: 40px; }
+
+    .ic-sub-amount { font-size: 16px; }
+    .ic-sub-words {
+        max-width: 100%;
+        font-size: 11px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    /* Detalles y Convertir quedan como íconos: el texto no entra en una fila. */
+    .ic-foot-btns .detail-label { display: none; }
+    .ic-detail-toggle, .ic-convert-toggle { padding: 8px; }
+
+    .btn-add { margin-top: 4px; }
+
+    /* ---------- Chat en el panel ---------- */
+    .chat-scroll { padding: 16px 20px 4px; }
+    .chat-input { font-size: 15px; }   /* en un panel angosto el placeholder no entra a 16px */
+    .chat-msg { max-width: 92%; }
+}

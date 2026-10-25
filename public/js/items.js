@@ -38,7 +38,7 @@ const Items = (() => {
                 </div>
                 <div class="ic-foot">
                     <div class="ic-foot-btns">
-                        <button class="ic-detail-toggle" type="button">
+                        <button class="ic-detail-toggle" type="button" title="Detalles">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
                             <span class="detail-label">Detalles</span>
                         </button>
