@@ -29,6 +29,7 @@
     };
 
     let tabs = null;            // control de las pestañas del editor (nav.js)
+    let huboSesion = false;     // esta carga de la página ya tuvo una sesión abierta
 
     // ================= Navegación =================
     function show(name) {
@@ -46,6 +47,10 @@
             const { token } = await API.login($('#login-password').value);
             API.setToken(token);
             $('#login-password').value = '';
+            // Cada acceso tiene sus propios datos. Si esta página ya tuvo otra sesión,
+            // lo que quedó en memoria (unidades, precios, chat) es de ese acceso:
+            // se recarga para entrar con todo limpio en vez de limpiar módulo por módulo.
+            if (huboSesion) return location.reload();
             await openList();
         } catch (err) {
             errEl.textContent = err.message;
@@ -73,6 +78,7 @@
         // unidad de cada item y el conversor.
         Unidades.cargarCatalogo();
         const budgets = await API.listBudgets();
+        huboSesion = true;
         const listEl = $('#budget-list');
         listEl.innerHTML = '';
         $('#list-empty').hidden = budgets.length > 0;
