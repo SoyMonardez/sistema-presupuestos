@@ -8,7 +8,7 @@ App para armar presupuestos de obra por items (nombre, cantidad, unidad, precio 
 - **Voz:** grabación en el navegador → Whisper por servidor (funciona en cualquier navegador; necesita HTTPS o localhost para poder usar el micrófono)
 - **Imágenes:** Pillow para achicar las fotos antes de mandarlas al modelo de visión
 - **PDF:** jsPDF client-side, con formato para cliente particular y para municipio
-- **Auth:** password única (`APP_PASSWORD`) + token firmado
+- **Auth:** una password por acceso (`APP_PASSWORD`, más `APP_PASSWORD_<NOMBRE>` para accesos extra) + token firmado. Cada acceso tiene su propia base de datos
 
 ## Correr local
 

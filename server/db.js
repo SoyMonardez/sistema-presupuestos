@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_UNITS, canonicalLabel } from './lib/units.js';
 
@@ -8,186 +9,274 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.join(__dirname, '..', 'data');
 fs.mkdirSync(dataDir, { recursive: true });
 
-const db = new Database(path.join(dataDir, 'presupuestos.db'));
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+// ---------------------------------------------------------------------------
+// Espacios de trabajo
+//
+// Cada acceso (cada contraseña) tiene su propia base SQLite: presupuestos,
+// precios, unidades, ajustes y chats no se mezclan con los de otro acceso.
+// El espacio 'principal' usa la base de siempre (presupuestos.db), así que quien
+// ya venía usando la app no nota nada.
+// ---------------------------------------------------------------------------
+export const PRINCIPAL = 'principal';
 
-db.exec(`
-CREATE TABLE IF NOT EXISTS budgets (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    name       TEXT NOT NULL,
-    client     TEXT NOT NULL DEFAULT '',
-    notes      TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
+const workspaces = new Map();      // nombre → Database
+const actual = new AsyncLocalStorage();
 
-CREATE TABLE IF NOT EXISTS items (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    budget_id  INTEGER NOT NULL REFERENCES budgets(id) ON DELETE CASCADE,
-    name       TEXT NOT NULL,
-    quantity   REAL NOT NULL DEFAULT 1,
-    unit       TEXT NOT NULL DEFAULT 'un.',
-    unit_price REAL NOT NULL DEFAULT 0,
-    position   INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE INDEX IF NOT EXISTS idx_items_budget ON items(budget_id);
-
-CREATE TABLE IF NOT EXISTS price_refs (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    name       TEXT NOT NULL,
-    unit       TEXT NOT NULL DEFAULT 'un.',
-    price      REAL NOT NULL DEFAULT 0,
-    position   INTEGER NOT NULL DEFAULT 0,
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
--- Catálogo de unidades. Antes la unidad era texto libre y convivían "m2", "M²" y
--- "metros cuadrados"; ahora hay una sola fuente de verdad, que además el usuario
--- puede ampliar con las suyas ("viaje de arena") desde Precios base.
-CREATE TABLE IF NOT EXISTS units (
-    id        INTEGER PRIMARY KEY AUTOINCREMENT,
-    code      TEXT NOT NULL UNIQUE,
-    label     TEXT NOT NULL,
-    kind      TEXT NOT NULL DEFAULT 'other',
-    factor    REAL,                              -- NULL = no convertible por escala
-    dims      TEXT NOT NULL DEFAULT '[]',        -- JSON: medidas para el camino de geometría
-    is_custom INTEGER NOT NULL DEFAULT 0,
-    position  INTEGER NOT NULL DEFAULT 0
-);
-
--- Parámetros del negocio. Una sola fila (id = 1).
---
--- Sin esto la IA estimaba "precio de mercado" y devolvía el COSTO DIRECTO
--- (material + mano de obra) como si fuera el precio de venta. Para un tipo solo
--- puede pasar; para una empresa que paga proveedores, sueldos e impuestos,
--- presupuestar a costo es trabajar gratis o perder plata.
-CREATE TABLE IF NOT EXISTS business_settings (
-    id             INTEGER PRIMARY KEY CHECK (id = 1),
-    gastos_pct     REAL NOT NULL DEFAULT 15,   -- gastos generales: obrador, flete, herramienta, seguros
-    utilidad_pct   REAL NOT NULL DEFAULT 15,   -- lo que gana la empresa
-    iibb_pct       REAL NOT NULL DEFAULT 3,    -- ingresos brutos (se calcula sobre la venta)
-    iva_pct        REAL NOT NULL DEFAULT 21,
-    aplica_iva     INTEGER NOT NULL DEFAULT 0, -- 0 = los precios se muestran sin IVA
-    updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-INSERT OR IGNORE INTO business_settings (id) VALUES (1);
-
--- Chat por presupuesto, con varias conversaciones (estilo ChatGPT).
---
--- "mode" es el modo de la conversación: 'asistente' (charla y validar ideas),
--- 'investigador' (investigar en internet) o 'presupuestador' (el único que
--- propone ops/simulate — editar el presupuesto de verdad). El default es
--- 'presupuestador' porque es el uso original y no queremos cambiarle el
--- comportamiento a nadie que ya venía usando el chat.
-CREATE TABLE IF NOT EXISTS chat_conversations (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    budget_id  INTEGER NOT NULL REFERENCES budgets(id) ON DELETE CASCADE,
-    title      TEXT NOT NULL DEFAULT '',
-    mode       TEXT NOT NULL DEFAULT 'presupuestador',
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_chat_conv_budget ON chat_conversations(budget_id);
-
-CREATE TABLE IF NOT EXISTS chat_messages (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    conversation_id INTEGER NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
-    role            TEXT NOT NULL,
-    content         TEXT NOT NULL DEFAULT '',
-    tool_json       TEXT NOT NULL DEFAULT '',    -- llamadas a herramientas y sus resultados
-    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_chat_msg_conv ON chat_messages(conversation_id);
-`);
-
-// Migraciones simples: agrega columnas si faltan (la DB puede venir de una versión anterior)
-function addColumnIfMissing(table, column, ddl) {
-    const exists = db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`).get(table, column);
-    if (!exists) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+function dbPath(name) {
+    return path.join(dataDir, name === PRINCIPAL ? 'presupuestos.db' : `presupuestos-${name}.db`);
 }
 
-addColumnIfMissing('budgets', 'location',      `location TEXT NOT NULL DEFAULT ''`);
-addColumnIfMissing('budgets', 'validity_days', `validity_days INTEGER NOT NULL DEFAULT 10`);
-addColumnIfMissing('budgets', 'advance_pct',   `advance_pct REAL NOT NULL DEFAULT 25`);
-addColumnIfMissing('items',   'detail',        `detail TEXT NOT NULL DEFAULT ''`);
+/** Abre (y migra) la base de un espacio. Se llama al arrancar, una vez por acceso. */
+export function openWorkspace(name) {
+    if (workspaces.has(name)) return workspaces.get(name);
+    const db = new Database(dbPath(name));
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    migrate(db);
+    workspaces.set(name, db);
+    return db;
+}
 
-// Formato del PDF: 'original' (Etan Construcción, color) o 'municipal' (blanco y negro, formal)
-addColumnIfMissing('budgets', 'format',          `format TEXT NOT NULL DEFAULT 'original'`);
-// Datos del cliente para el formato municipal (cabecera formal)
-addColumnIfMissing('budgets', 'client_role',     `client_role TEXT NOT NULL DEFAULT ''`);     // Ej: "Intendente: Dra. Susana Laciar"
-addColumnIfMissing('budgets', 'client_address',  `client_address TEXT NOT NULL DEFAULT ''`);
-addColumnIfMissing('budgets', 'client_cp',       `client_cp TEXT NOT NULL DEFAULT ''`);
-addColumnIfMissing('budgets', 'client_phone',    `client_phone TEXT NOT NULL DEFAULT ''`);
-addColumnIfMissing('budgets', 'client_email',    `client_email TEXT NOT NULL DEFAULT ''`);
+/** Corre `fn` con `name` como espacio activo (lo que ven los `db.prepare` de las rutas). */
+export function runInWorkspace(name, fn) {
+    return actual.run(name, fn);
+}
 
-// Modo de la conversación: ver el comentario de la tabla más arriba. Las
-// conversaciones que ya existían quedan en 'presupuestador' (el default de la
-// columna), que es como se comportaban antes de que existieran los modos.
-addColumnIfMissing('chat_conversations', 'mode', `mode TEXT NOT NULL DEFAULT 'presupuestador'`);
+/**
+ * Deja `name` como espacio activo para el resto de esta petición.
+ *
+ * Hace falta (además del middleware de arriba) después de cualquier body-parser:
+ * el parser termina de leer el cuerpo dentro de un callback del socket, que no
+ * hereda el contexto, así que el espacio se perdería justo antes de la ruta.
+ */
+export function enterWorkspace(name) {
+    actual.enterWith(name);
+}
 
-// Siembra el catálogo de unidades la primera vez. Después no se toca: si el
-// usuario borra una unidad de fábrica, es porque no la usa y no queremos que
-// reaparezca en cada reinicio.
-const seedUnits = db.transaction(() => {
-    const insert = db.prepare(
-        `INSERT INTO units (code, label, kind, factor, dims, is_custom, position)
-         VALUES (?, ?, ?, ?, ?, 0, ?)`
+function current() {
+    const name = actual.getStore();
+    const db = name && workspaces.get(name);
+    // Sin espacio no se cae al principal: sería mostrarle a un acceso los datos de otro.
+    if (!db) throw new Error('Consulta a la base sin espacio de trabajo activo');
+    return db;
+}
+
+// Las rutas arman sus statements al cargar el módulo (`const listStmt = db.prepare(...)`),
+// cuando todavía no hay petición ni espacio. Por eso `prepare` y `transaction`
+// devuelven objetos perezosos que resuelven la base recién al usarse, y cachean
+// el statement real por base.
+function lazyPrepare(sql) {
+    const cache = new Map();       // Database → Statement
+    const real = () => {
+        const db = current();
+        let st = cache.get(db);
+        if (!st) { st = db.prepare(sql); cache.set(db, st); }
+        return st;
+    };
+    return {
+        get: (...a) => real().get(...a),
+        all: (...a) => real().all(...a),
+        run: (...a) => real().run(...a),
+        iterate: (...a) => real().iterate(...a),
+    };
+}
+
+function lazyTransaction(fn) {
+    const cache = new Map();       // Database → función transaccional
+    return (...args) => {
+        const db = current();
+        let tx = cache.get(db);
+        if (!tx) { tx = db.transaction(fn); cache.set(db, tx); }
+        return tx(...args);
+    };
+}
+
+const db = {
+    prepare: lazyPrepare,
+    transaction: lazyTransaction,
+    exec: (sql) => current().exec(sql),
+    pragma: (...a) => current().pragma(...a),
+};
+
+function migrate(db) {
+    db.exec(`
+    CREATE TABLE IF NOT EXISTS budgets (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        name       TEXT NOT NULL,
+        client     TEXT NOT NULL DEFAULT '',
+        notes      TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-    DEFAULT_UNITS.forEach((u, i) => {
-        insert.run(u.code, u.label, u.kind, u.factor, JSON.stringify(u.dims || []), i);
-    });
-});
 
-if (db.prepare('SELECT COUNT(*) AS n FROM units').get().n === 0) {
-    seedUnits();
+    CREATE TABLE IF NOT EXISTS items (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        budget_id  INTEGER NOT NULL REFERENCES budgets(id) ON DELETE CASCADE,
+        name       TEXT NOT NULL,
+        quantity   REAL NOT NULL DEFAULT 1,
+        unit       TEXT NOT NULL DEFAULT 'un.',
+        unit_price REAL NOT NULL DEFAULT 0,
+        position   INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_items_budget ON items(budget_id);
+
+    CREATE TABLE IF NOT EXISTS price_refs (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        name       TEXT NOT NULL,
+        unit       TEXT NOT NULL DEFAULT 'un.',
+        price      REAL NOT NULL DEFAULT 0,
+        position   INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- Catálogo de unidades. Antes la unidad era texto libre y convivían "m2", "M²" y
+    -- "metros cuadrados"; ahora hay una sola fuente de verdad, que además el usuario
+    -- puede ampliar con las suyas ("viaje de arena") desde Precios base.
+    CREATE TABLE IF NOT EXISTS units (
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        code      TEXT NOT NULL UNIQUE,
+        label     TEXT NOT NULL,
+        kind      TEXT NOT NULL DEFAULT 'other',
+        factor    REAL,                              -- NULL = no convertible por escala
+        dims      TEXT NOT NULL DEFAULT '[]',        -- JSON: medidas para el camino de geometría
+        is_custom INTEGER NOT NULL DEFAULT 0,
+        position  INTEGER NOT NULL DEFAULT 0
+    );
+
+    -- Parámetros del negocio. Una sola fila (id = 1).
+    --
+    -- Sin esto la IA estimaba "precio de mercado" y devolvía el COSTO DIRECTO
+    -- (material + mano de obra) como si fuera el precio de venta. Para un tipo solo
+    -- puede pasar; para una empresa que paga proveedores, sueldos e impuestos,
+    -- presupuestar a costo es trabajar gratis o perder plata.
+    CREATE TABLE IF NOT EXISTS business_settings (
+        id             INTEGER PRIMARY KEY CHECK (id = 1),
+        gastos_pct     REAL NOT NULL DEFAULT 15,   -- gastos generales: obrador, flete, herramienta, seguros
+        utilidad_pct   REAL NOT NULL DEFAULT 15,   -- lo que gana la empresa
+        iibb_pct       REAL NOT NULL DEFAULT 3,    -- ingresos brutos (se calcula sobre la venta)
+        iva_pct        REAL NOT NULL DEFAULT 21,
+        aplica_iva     INTEGER NOT NULL DEFAULT 0, -- 0 = los precios se muestran sin IVA
+        updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    INSERT OR IGNORE INTO business_settings (id) VALUES (1);
+
+    -- Chat por presupuesto, con varias conversaciones (estilo ChatGPT).
+    --
+    -- "mode" es el modo de la conversación: 'asistente' (charla y validar ideas),
+    -- 'investigador' (investigar en internet) o 'presupuestador' (el único que
+    -- propone ops/simulate — editar el presupuesto de verdad). El default es
+    -- 'presupuestador' porque es el uso original y no queremos cambiarle el
+    -- comportamiento a nadie que ya venía usando el chat.
+    CREATE TABLE IF NOT EXISTS chat_conversations (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        budget_id  INTEGER NOT NULL REFERENCES budgets(id) ON DELETE CASCADE,
+        title      TEXT NOT NULL DEFAULT '',
+        mode       TEXT NOT NULL DEFAULT 'presupuestador',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_conv_budget ON chat_conversations(budget_id);
+
+    CREATE TABLE IF NOT EXISTS chat_messages (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id INTEGER NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+        role            TEXT NOT NULL,
+        content         TEXT NOT NULL DEFAULT '',
+        tool_json       TEXT NOT NULL DEFAULT '',    -- llamadas a herramientas y sus resultados
+        created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_msg_conv ON chat_messages(conversation_id);
+    `);
+
+    // Migraciones simples: agrega columnas si faltan (la DB puede venir de una versión anterior)
+    function addColumnIfMissing(table, column, ddl) {
+        const exists = db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`).get(table, column);
+        if (!exists) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+    }
+
+    addColumnIfMissing('budgets', 'location',      `location TEXT NOT NULL DEFAULT ''`);
+    addColumnIfMissing('budgets', 'validity_days', `validity_days INTEGER NOT NULL DEFAULT 10`);
+    addColumnIfMissing('budgets', 'advance_pct',   `advance_pct REAL NOT NULL DEFAULT 25`);
+    addColumnIfMissing('items',   'detail',        `detail TEXT NOT NULL DEFAULT ''`);
+
+    // Formato del PDF: 'original' (Etan Construcción, color) o 'municipal' (blanco y negro, formal)
+    addColumnIfMissing('budgets', 'format',          `format TEXT NOT NULL DEFAULT 'original'`);
+    // Datos del cliente para el formato municipal (cabecera formal)
+    addColumnIfMissing('budgets', 'client_role',     `client_role TEXT NOT NULL DEFAULT ''`);     // Ej: "Intendente: Dra. Susana Laciar"
+    addColumnIfMissing('budgets', 'client_address',  `client_address TEXT NOT NULL DEFAULT ''`);
+    addColumnIfMissing('budgets', 'client_cp',       `client_cp TEXT NOT NULL DEFAULT ''`);
+    addColumnIfMissing('budgets', 'client_phone',    `client_phone TEXT NOT NULL DEFAULT ''`);
+    addColumnIfMissing('budgets', 'client_email',    `client_email TEXT NOT NULL DEFAULT ''`);
+
+    // Modo de la conversación: ver el comentario de la tabla más arriba. Las
+    // conversaciones que ya existían quedan en 'presupuestador' (el default de la
+    // columna), que es como se comportaban antes de que existieran los modos.
+    addColumnIfMissing('chat_conversations', 'mode', `mode TEXT NOT NULL DEFAULT 'presupuestador'`);
+
+    // Siembra el catálogo de unidades la primera vez. Después no se toca: si el
+    // usuario borra una unidad de fábrica, es porque no la usa y no queremos que
+    // reaparezca en cada reinicio.
+    const seedUnits = db.transaction(() => {
+        const insert = db.prepare(
+            `INSERT INTO units (code, label, kind, factor, dims, is_custom, position)
+             VALUES (?, ?, ?, ?, ?, 0, ?)`
+        );
+        DEFAULT_UNITS.forEach((u, i) => {
+            insert.run(u.code, u.label, u.kind, u.factor, JSON.stringify(u.dims || []), i);
+        });
+    });
+
+    if (db.prepare('SELECT COUNT(*) AS n FROM units').get().n === 0) {
+        seedUnits();
+    }
+
+    // ---------------------------------------------------------------------------
+    // Migraciones de datos (una sola vez, marcadas con PRAGMA user_version)
+    // ---------------------------------------------------------------------------
+    const SCHEMA_VERSION = 1;
+    const currentVersion = db.pragma('user_version', { simple: true });
+
+    if (currentVersion < 1) {
+        // v1 — Las unidades venían de un campo de texto libre, así que en la base hay
+        // "m2", "M²", "mts2" y "metros cuadrados" mezclados. Sin esto, los presupuestos
+        // que ya existen quedan afuera del sistema de conversión.
+        const catalog = loadUnitCatalog(db);
+        const normalizeExisting = db.transaction(() => {
+            const rows = db.prepare('SELECT id, unit FROM items').all();
+            const update = db.prepare('UPDATE items SET unit = ? WHERE id = ?');
+            let changed = 0;
+            for (const row of rows) {
+                const canonical = canonicalLabel(row.unit, catalog);
+                if (canonical !== row.unit) { update.run(canonical, row.id); changed++; }
+            }
+            // El tarifario tiene el mismo problema y alimenta los prompts de la IA.
+            const priceRows = db.prepare('SELECT id, unit FROM price_refs').all();
+            const updatePrice = db.prepare('UPDATE price_refs SET unit = ? WHERE id = ?');
+            for (const row of priceRows) {
+                const canonical = canonicalLabel(row.unit, catalog);
+                if (canonical !== row.unit) { updatePrice.run(canonical, row.id); changed++; }
+            }
+            return changed;
+        });
+        const changed = normalizeExisting();
+        if (changed) console.log(`[presupuestos] Unidades normalizadas: ${changed}`);
+        db.pragma(`user_version = ${SCHEMA_VERSION}`);
+    }
 }
 
 // Lee el catálogo con los dims ya parseados. Es la fuente de verdad en runtime
 // (incluye las unidades propias del usuario), no la lista de DEFAULT_UNITS.
-export function loadUnitCatalog() {
-    return db.prepare('SELECT * FROM units ORDER BY position, id').all().map(u => ({
+// Sin argumento lee el espacio activo; las migraciones pasan la base que están migrando.
+export function loadUnitCatalog(base = current()) {
+    return base.prepare('SELECT * FROM units ORDER BY position, id').all().map(u => ({
         ...u,
         is_custom: Boolean(u.is_custom),
         dims: (() => { try { return JSON.parse(u.dims); } catch { return []; } })(),
     }));
-}
-
-// ---------------------------------------------------------------------------
-// Migraciones de datos (una sola vez, marcadas con PRAGMA user_version)
-// ---------------------------------------------------------------------------
-const SCHEMA_VERSION = 1;
-const currentVersion = db.pragma('user_version', { simple: true });
-
-if (currentVersion < 1) {
-    // v1 — Las unidades venían de un campo de texto libre, así que en la base hay
-    // "m2", "M²", "mts2" y "metros cuadrados" mezclados. Sin esto, los presupuestos
-    // que ya existen quedan afuera del sistema de conversión.
-    const catalog = loadUnitCatalog();
-    const normalizeExisting = db.transaction(() => {
-        const rows = db.prepare('SELECT id, unit FROM items').all();
-        const update = db.prepare('UPDATE items SET unit = ? WHERE id = ?');
-        let changed = 0;
-        for (const row of rows) {
-            const canonical = canonicalLabel(row.unit, catalog);
-            if (canonical !== row.unit) { update.run(canonical, row.id); changed++; }
-        }
-        // El tarifario tiene el mismo problema y alimenta los prompts de la IA.
-        const priceRows = db.prepare('SELECT id, unit FROM price_refs').all();
-        const updatePrice = db.prepare('UPDATE price_refs SET unit = ? WHERE id = ?');
-        for (const row of priceRows) {
-            const canonical = canonicalLabel(row.unit, catalog);
-            if (canonical !== row.unit) { updatePrice.run(canonical, row.id); changed++; }
-        }
-        return changed;
-    });
-    const changed = normalizeExisting();
-    if (changed) console.log(`[presupuestos] Unidades normalizadas: ${changed}`);
-    db.pragma(`user_version = ${SCHEMA_VERSION}`);
 }
 
 export default db;

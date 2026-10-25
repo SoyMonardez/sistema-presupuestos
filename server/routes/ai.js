@@ -6,6 +6,7 @@ import { normalizeOps } from '../lib/ops.js';
 import { canonicalLabel } from '../lib/units.js';
 import { conReintentoDeTamaño } from '../lib/images.js';
 import db, { loadUnitCatalog } from '../db.js';
+import { workspace } from '../auth.js';
 import { priceRefsPromptBlock } from './prices.js';
 import { unitsPromptBlock } from './units.js';
 import { loadSettings } from './settings.js';
@@ -52,7 +53,7 @@ Reglas:
 // Audio crudo (el frontend manda el blob del MediaRecorder tal cual)
 const rawAudio = express.raw({ type: ['audio/*', 'video/*', 'application/octet-stream'], limit: '15mb' });
 
-router.post('/transcribe', rawAudio, async (req, res) => {
+router.post('/transcribe', rawAudio, workspace, async (req, res) => {
     if (!req.body || !req.body.length) {
         return res.status(400).json({ error: 'No llegó audio' });
     }
@@ -338,7 +339,7 @@ const IMAGE_TYPES = {
 // número de cada op referencia lo que está guardado de verdad.
 const rawImage = express.raw({ type: () => true, limit: '20mb' });
 
-router.post('/vision', rawImage, async (req, res) => {
+router.post('/vision', rawImage, workspace, async (req, res) => {
     const ext = String(req.query.ext || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     const mediaType = IMAGE_TYPES[ext];
     if (!mediaType) {

@@ -2,7 +2,8 @@ import './env.js';
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { authMiddleware, issueToken, verifyPassword } from './auth.js';
+import { ACCESSES, authMiddleware, issueToken, verifyPassword, workspace } from './auth.js';
+import { openWorkspace } from './db.js';
 import budgetsRouter from './routes/budgets.js';
 import pricesRouter from './routes/prices.js';
 import unitsRouter from './routes/units.js';
@@ -20,6 +21,10 @@ if (!process.env.APP_PASSWORD || !process.env.APP_SECRET) {
     console.error('[presupuestos] Faltan APP_PASSWORD y/o APP_SECRET en .env');
     process.exit(1);
 }
+
+// Abre y migra la base de cada acceso al arrancar, así un problema se ve acá y no
+// la primera vez que alguien entra.
+for (const name of ACCESSES.keys()) openWorkspace(name);
 
 const app = express();
 app.disable('x-powered-by');
@@ -82,9 +87,10 @@ app.post('/api/login', (req, res) => {
     if (entry && entry.resetAt > now && entry.count >= MAX_INTENTOS) {
         return res.status(429).json({ error: 'Demasiados intentos. Esperá unos minutos.' });
     }
-    if (verifyPassword(String(req.body?.password || ''))) {
+    const ws = verifyPassword(String(req.body?.password || ''));
+    if (ws) {
         loginAttempts.delete(ip);
-        return res.json({ token: issueToken() });
+        return res.json({ token: issueToken(ws) });
     }
     if (!entry || entry.resetAt <= now) {
         loginAttempts.set(ip, { count: 1, resetAt: now + VENTANA_MS });
@@ -107,13 +113,13 @@ app.use('/api/import', authMiddleware, importRouter);
 // Con su propio límite de body: los mensajes pueden traer una foto en base64. El
 // navegador ya la achica antes de mandarla (unos 150 kb), pero si no pudo —HEIC
 // fuera de iPhone— sube la original, y 512 kb no alcanzan.
-app.use('/api', authMiddleware, express.json({ limit: '12mb' }), chatRouter);
+app.use('/api', authMiddleware, express.json({ limit: '12mb' }), workspace, chatRouter);
 
 // ---------- Frontend estático ----------
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 app.listen(PORT, () => {
-    console.log(`[presupuestos] Escuchando en http://localhost:${PORT}`);
+    console.log(`[presupuestos] Escuchando en http://localhost:${PORT}  (accesos: ${[...ACCESSES.keys()].join(', ')})`);
     // Qué proveedor atiende cada tarea. Si falta una API key se ve acá al arrancar,
     // en vez de descubrirlo cuando la app tira un error a mitad de un presupuesto.
     const rutas = routingSummary();

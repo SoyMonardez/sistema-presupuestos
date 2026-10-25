@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseItemsFromText } from './ai.js';
+import { workspace } from '../auth.js';
 
 const router = Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -72,7 +73,7 @@ function normItems(arr) {
     })).filter(i => i.name.trim());
 }
 
-router.post('/', rawFile, async (req, res) => {
+router.post('/', rawFile, workspace, async (req, res) => {
     const ext = String(req.query.ext || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     if (!ALLOWED.includes(ext)) {
         return res.status(400).json({ error: 'Subí un archivo PDF, Excel (.xlsx) o CSV' });
