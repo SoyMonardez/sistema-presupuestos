@@ -118,6 +118,7 @@ addColumnIfMissing('items',   'detail',        `detail TEXT NOT NULL DEFAULT ''`
 
 // Formato del PDF: 'original' (Etan Construcción, color) o 'municipal' (blanco y negro, formal)
 addColumnIfMissing('budgets', 'format',          `format TEXT NOT NULL DEFAULT 'original'`);
+addColumnIfMissing('budgets', 'pdf_orientation', `pdf_orientation TEXT NOT NULL DEFAULT 'landscape'`);
 // Datos del cliente para el formato municipal (cabecera formal)
 addColumnIfMissing('budgets', 'client_role',     `client_role TEXT NOT NULL DEFAULT ''`);     // Ej: "Intendente: Dra. Susana Laciar"
 addColumnIfMissing('budgets', 'client_address',  `client_address TEXT NOT NULL DEFAULT ''`);

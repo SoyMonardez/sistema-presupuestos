@@ -119,6 +119,12 @@ export async function prepareForVision(buffer, mediaType, { maxWidth = ANCHO_MAX
         console.log(`[vision] imagen ${info.original_width}x${info.original_height} → ${info.width}x${info.height} (${Math.round(buffer.length / 1024)}kb → ${Math.round(shrunk.length / 1024)}kb)`);
         return { data: shrunk.toString('base64'), mediaType: 'image/jpeg' };
     } catch (err) {
+        // Claude no acepta HEIC/HEIF. Si la conversión falla, mandarle el
+        // original solo reemplaza el error real por un 400 menos comprensible.
+        if (/^image\/hei[cf]$/i.test(mediaType)) {
+            console.error('[vision] no se pudo convertir HEIC/HEIF:', err.message);
+            throw new Error('No se pudo convertir la foto HEIC. Verificá que el archivo no esté dañado.');
+        }
         console.warn('[vision] no se pudo achicar la imagen, va la original:', err.message);
         return { data: buffer.toString('base64'), mediaType };
     } finally {

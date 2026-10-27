@@ -423,6 +423,14 @@ function safeParse(txt) {
 
 const MAX_HISTORIAL = 14;   // mensajes previos que se le mandan al modelo
 
+// En modo Investigador toda consulta concreta se busca: no dependemos de que el
+// modelo recuerde pedir la herramienta después de una respuesta genérica.
+function requiereBusquedaEnInvestigador(texto) {
+    const limpio = String(texto || '').trim().toLowerCase();
+    if (limpio.length < 8) return false;
+    return !/^(hola|buenas|gracias|ok|dale|listo)[!?.\s]*$/.test(limpio);
+}
+
 /**
  * Todo el trabajo de responder un mensaje. Lo comparten el endpoint normal y el
  * de streaming, para que no haya dos versiones de la misma lógica que se
@@ -551,18 +559,31 @@ async function responder(chat, texto, itemNum, onDelta, imagen, onStatus) {
     // descartan a propósito: estaban armadas con precios inventados, y las que
     // valen son las de la segunda, hechas con los datos reales.
     let fuentes = [];
-    if (respuesta.web_query) {
+    const consultaWeb = String(
+        respuesta.web_query || (chat.mode === 'investigador' && requiereBusquedaEnInvestigador(texto) ? texto : '')
+    ).trim();
+    if (consultaWeb) {
         try {
-            onStatus?.({ fase: 'buscando', query: String(respuesta.web_query).slice(0, 120) });
-            const hallazgo = await webSearch(String(respuesta.web_query).slice(0, 300));
+            onStatus?.({ fase: 'buscando', query: consultaWeb.slice(0, 120) });
+            const hallazgo = await webSearch(consultaWeb.slice(0, 300));
             fuentes = hallazgo.sources || [];
+            if (!hallazgo.text) throw new Error('La búsqueda no devolvió datos útiles');
             onStatus?.({ fase: 'redactando' });
+            // Sonnet ya investigó y redactó el informe. En este modo no se le
+            // pide una segunda respuesta: esa vuelta podía reemplazar datos y
+            // fuentes por una frase genérica o una pregunta de aclaración.
+            if (chat.mode === 'investigador') {
+                crudo = '';
+                mostrado = '';
+                rehizo = true;
+                respuesta = { reply: hallazgo.text };
+            } else {
             const seguimiento = [
                 ...mensajes,
                 { role: 'assistant', content: JSON.stringify({ reply: 'Buscando…' }) },
                 {
                     role: 'user',
-                    content: `Resultados de la búsqueda "${respuesta.web_query}":\n${hallazgo.text}\n\nUsá ESTOS precios, no los de tu memoria. Si lo que te pidió era armar o ajustar un presupuesto, mandá ahora las "ops" con estos valores como costo directo ("es_costo_directo": true). Aclarale que salieron de internet y no de su tarifario, y que los revise. No devuelvas web_query de nuevo.`,
+                    content: `Resultados de la búsqueda "${consultaWeb}":\n${hallazgo.text}\n\nUsá ESTOS precios, no los de tu memoria. Si lo que te pidió era armar o ajustar un presupuesto, mandá ahora las "ops" con estos valores como costo directo ("es_costo_directo": true). Aclarale que salieron de internet y no de su tarifario, y que los revise. No devuelvas web_query de nuevo.`,
                 },
             ];
             // En la segunda pasada se vuelve a arrancar el texto desde cero: lo
@@ -573,6 +594,7 @@ async function responder(chat, texto, itemNum, onDelta, imagen, onStatus) {
             respuesta = emitir
                 ? await completeStream({ task: 'chat', system, messages: seguimiento, expectJson: true, maxTokens: TOKENS_SALIDA, laxFallback: true }, emitir)
                 : await complete({ task: 'chat', system, messages: seguimiento, expectJson: true, maxTokens: TOKENS_SALIDA, laxFallback: true });
+            }
         } catch (err) {
             console.warn('[chat] búsqueda web falló:', err.message);
             // Distinguir la cuota agotada de una falla cualquiera: si le decís
