@@ -119,6 +119,7 @@
             client_role: data.client_role || '', client_address: data.client_address || '',
             client_cp: data.client_cp || '', client_phone: data.client_phone || '', client_email: data.client_email || '',
         }, data.items.map(i => ({
+            uid: i.uid || undefined,
             name: i.name, detail: i.detail || '', quantity: i.quantity, unit: i.unit, unit_price: i.unit_price,
         })));
 
@@ -387,7 +388,7 @@
             getBudgetId: () => Estado.actual()?.id,
             getItems: () => Estado.lista(),
             applyOps: (ops) => {
-                Estado.aplicarYGuardar(ops);
+                Estado.aplicarYGuardar(ops, 'chat');
                 toast('Cambios aplicados');
             },
             toast,

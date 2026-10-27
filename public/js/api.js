@@ -31,7 +31,10 @@ const API = {
     getBudget(id)      { return this.request(`/api/budgets/${id}`); },
     updateBudget(id, body) { return this.request(`/api/budgets/${id}`, { method: 'PUT', body: JSON.stringify(body) }); },
     deleteBudget(id)   { return this.request(`/api/budgets/${id}`, { method: 'DELETE' }); },
-    saveItems(id, items) { return this.request(`/api/budgets/${id}/items`, { method: 'PUT', body: JSON.stringify({ items }) }); },
+    // `origen` queda en el historial del presupuesto: quién hizo el cambio.
+    saveItems(id, items, origen = 'manual') {
+        return this.request(`/api/budgets/${id}/items`, { method: 'PUT', headers: { 'X-Origen': origen }, body: JSON.stringify({ items }) });
+    },
     getPrices()        { return this.request('/api/prices'); },
     savePrices(prices) { return this.request('/api/prices', { method: 'PUT', body: JSON.stringify({ prices }) }); },
     getSettings()      { return this.request('/api/settings'); },

@@ -26,6 +26,7 @@ import { priceRefsPromptBlock, listarPreciosRef } from './prices.js';
 import { unitsPromptBlock } from './units.js';
 import { loadSettings } from './settings.js';
 import { markupPromptBlock } from '../lib/markup.js';
+import { historialPromptBlock, REGLAS_DESHACER } from '../lib/historial.js';
 
 const router = Router();
 
@@ -462,7 +463,10 @@ async function responder(chat, texto, itemNum, onDelta, imagen, onStatus) {
         + unitsPromptBlock()
         + priceRefsPromptBlock()
         + markupPromptBlock(markup)
-        + historicoPromptBlock(chat.budget_id, texto);
+        + historicoPromptBlock(chat.budget_id, texto)
+        // Solo el presupuestador edita: es el único al que le sirve el
+        // historial para deshacer o volver a un valor anterior.
+        + (chat.mode === 'presupuestador' ? REGLAS_DESHACER + historialPromptBlock(chat.budget_id, items) : '');
 
     const mensajes = [
         { role: 'user', content: `Presupuesto actual:\n${JSON.stringify(contexto).slice(0, 7000)}` },

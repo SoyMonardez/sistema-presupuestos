@@ -108,6 +108,12 @@ prueba('eco: un pedido nuevo no es eco', !L.esEco('agregá contrapiso 20 metros 
 prueba('eco: una palabra suelta no alcanza para decidir', !L.esEco('listo', dicho));
 prueba('eco: sin nada dicho, nunca es eco', !L.esEco('agregué la demolición', []));
 prueba('eco: ignora tildes y mayúsculas', L.esEco('AGREGUE LA DEMOLICION', dicho));
+// El caso que se perdía: comparte "contrapiso" y "mil" con lo que acaba de
+// decir, pero es un pedido nuevo.
+prueba('eco: un pedido que repite palabras de la respuesta NO es eco',
+    !L.esEco('ahora el contrapiso a 21 mil', ['Listo, el contrapiso quedó a 18 mil. ¿Seguimos?']));
+prueba('eco: la respuesta repetida tal cual sí es eco',
+    L.esEco('el contrapiso quedó a 18 mil', ['Listo, el contrapiso quedó a 18 mil. ¿Seguimos?']));
 
 console.log(`\n${ok}/${total}`);
 process.exit(ok === total ? 0 : 1);
