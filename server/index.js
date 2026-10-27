@@ -11,6 +11,7 @@ import aiRouter from './routes/ai.js';
 import importRouter from './routes/import.js';
 import chatRouter from './routes/chat.js';
 import settingsRouter from './routes/settings.js';
+import vozRouter from './routes/voz.js';
 import { routingSummary } from './ai/provider.js';
 import { buildCsp } from './csp.js';
 
@@ -107,6 +108,7 @@ app.use('/api/units', authMiddleware, unitsRouter);
 app.use('/api/settings', authMiddleware, settingsRouter);
 app.use('/api/ai', authMiddleware, aiRouter);
 app.use('/api/import', authMiddleware, importRouter);
+app.use('/api/voz', authMiddleware, vozRouter);
 // El chat cuelga de /api porque tiene rutas de los dos lados: las conversaciones
 // de un presupuesto (/api/budgets/:id/chats) y los mensajes (/api/chats/:id/...).
 //

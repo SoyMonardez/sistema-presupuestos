@@ -44,13 +44,14 @@ router.put('/:id', (req, res) => {
     const validity = Math.max(0, Math.round(Number(req.body?.validity_days ?? budget.validity_days) || 0));
     const advance  = Math.min(100, Math.max(0, Number(req.body?.advance_pct ?? budget.advance_pct) || 0));
     const format   = (String(req.body?.format ?? budget.format).trim() === 'municipal') ? 'municipal' : 'original';
+    const pdfOrientation = (String(req.body?.pdf_orientation ?? budget.pdf_orientation).trim() === 'portrait') ? 'portrait' : 'landscape';
     const cRole    = String(req.body?.client_role ?? budget.client_role).trim();
     const cAddr    = String(req.body?.client_address ?? budget.client_address).trim();
     const cCp      = String(req.body?.client_cp ?? budget.client_cp).trim();
     const cPhone   = String(req.body?.client_phone ?? budget.client_phone).trim();
     const cEmail   = String(req.body?.client_email ?? budget.client_email).trim();
-    db.prepare(`UPDATE budgets SET name = ?, client = ?, notes = ?, location = ?, validity_days = ?, advance_pct = ?, format = ?, client_role = ?, client_address = ?, client_cp = ?, client_phone = ?, client_email = ?, updated_at = datetime('now') WHERE id = ?`)
-      .run(name, client, notes, location, validity, advance, format, cRole, cAddr, cCp, cPhone, cEmail, budget.id);
+    db.prepare(`UPDATE budgets SET name = ?, client = ?, notes = ?, location = ?, validity_days = ?, advance_pct = ?, format = ?, pdf_orientation = ?, client_role = ?, client_address = ?, client_cp = ?, client_phone = ?, client_email = ?, updated_at = datetime('now') WHERE id = ?`)
+      .run(name, client, notes, location, validity, advance, format, pdfOrientation, cRole, cAddr, cCp, cPhone, cEmail, budget.id);
     res.json(getStmt.get(budget.id));
 });
 

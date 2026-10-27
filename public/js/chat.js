@@ -13,6 +13,7 @@ const Chat = (() => {
     let cfg = null;         // { getBudgetId, getItems, applyOps, toast }
     let chatId = null;
     let enviando = false;
+    let solicitudActual = null;
     let itemFoco = null;    // item señalado desde el atajo de la tarjeta
     let modo = 'presupuestador';   // 'asistente' | 'investigador' | 'presupuestador'
 
@@ -78,7 +79,8 @@ const Chat = (() => {
 
         $('#chat-form').addEventListener('submit', (e) => {
             e.preventDefault();
-            enviar($('#chat-input').value);
+            if (enviando) detenerRespuesta();
+            else enviar($('#chat-input').value);
         });
 
         // Enter manda, Shift+Enter hace salto de línea. En el celular el teclado
@@ -86,7 +88,8 @@ const Chat = (() => {
         $('#chat-input').addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey && window.matchMedia('(min-width: 600px)').matches) {
                 e.preventDefault();
-                enviar($('#chat-input').value);
+                if (enviando) detenerRespuesta();
+                else enviar($('#chat-input').value);
             }
         });
 
@@ -752,7 +755,8 @@ const Chat = (() => {
         pintar('user', texto, foto ? { image: foto } : null);
 
         enviando = true;
-        $('#chat-send').disabled = true;
+        solicitudActual = new AbortController();
+        actualizarBotonEnvio();
         let pensando = pintarEstado(MODOS[modo].pensando);
 
         try {
@@ -793,7 +797,7 @@ const Chat = (() => {
                 scrollAbajo();
             };
 
-            const out = await API.streamChatMessage(chatId, texto, itemFoco, onDelta, foto, onStatus);
+            const out = await API.streamChatMessage(chatId, texto, itemFoco, onDelta, foto, onStatus, solicitudActual.signal);
             itemFoco = null;
             $('#chat-input').placeholder = 'Escribile al asistente…';
             pensando.remove();
@@ -820,11 +824,32 @@ const Chat = (() => {
             scrollAbajo();
         } catch (err) {
             pensando.remove();
-            pintar('assistant', err.message || 'No pude responder, probá de nuevo.');
+            // Cancelar es una decisión del usuario, no un error: queda visible
+            // lo que ya llegó y el chat queda listo para seguir escribiendo.
+            if (err?.name !== 'AbortError') {
+                pintar('assistant', err.message || 'No pude responder, probá de nuevo.');
+            }
         } finally {
             enviando = false;
-            $('#chat-send').disabled = false;
+            solicitudActual = null;
+            actualizarBotonEnvio();
         }
+    }
+
+    /** Corta la respuesta que está llegando, igual que los chats habituales. */
+    function detenerRespuesta() {
+        if (!enviando || !solicitudActual) return;
+        solicitudActual.abort();
+    }
+
+    function actualizarBotonEnvio() {
+        const btn = $('#chat-send');
+        btn.classList.toggle('detener', enviando);
+        btn.setAttribute('aria-label', enviando ? 'Detener respuesta' : 'Enviar');
+        btn.title = enviando ? 'Detener respuesta' : 'Enviar';
+        btn.innerHTML = enviando
+            ? '<svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>'
+            : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>';
     }
 
     /**

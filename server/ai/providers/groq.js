@@ -8,6 +8,9 @@
 const API = 'https://api.groq.com/openai/v1';
 
 const MODEL         = process.env.GROQ_MODEL         || 'qwen/qwen3.6-27b';
+// Para lo que tiene que volver en una fracción de segundo (cortar lo dictado en
+// pedidos). Si no se configura, se usa el de siempre sin razonar.
+const FAST_MODEL    = process.env.GROQ_FAST_MODEL    || MODEL;
 const VISION_MODEL  = process.env.GROQ_VISION_MODEL  || MODEL;
 const SEARCH_MODEL  = process.env.GROQ_SEARCH_MODEL  || 'groq/compound-mini';
 const WHISPER_MODEL = process.env.GROQ_WHISPER_MODEL || 'whisper-large-v3-turbo';
@@ -127,10 +130,10 @@ async function fetchConEspera(url, opciones, intentos = 2) {
 }
 
 // El cuerpo del request es el mismo con y sin streaming; solo cambia el flag.
-function buildBody({ system, messages, schema, expectJson, maxTokens, temperature, hasImages, effort, stream = false }) {
+function buildBody({ system, messages, schema, expectJson, maxTokens, temperature, hasImages, effort, fast = false, stream = false }) {
     const wantsJson = Boolean(schema) || expectJson;
     return {
-        model: hasImages ? VISION_MODEL : MODEL,
+        model: hasImages ? VISION_MODEL : (fast ? FAST_MODEL : MODEL),
         messages: toGroqMessages(system, messages),
         temperature,
         max_tokens: maxTokens,
@@ -232,14 +235,14 @@ function sinMargenParaContestar(data, err) {
     return choice?.finish_reason === 'length' && !choice?.message?.content;
 }
 
-export async function complete({ system, messages, schema, expectJson = false, maxTokens = 2000, temperature = 0.2, hasImages = false, effort = 'medium', laxFallback = false }) {
+export async function complete({ system, messages, schema, expectJson = false, maxTokens = 2000, temperature = 0.2, hasImages = false, effort = 'medium', laxFallback = false, fast = false }) {
     const wantsJson = Boolean(schema) || expectJson;
 
     const pedir = async (esfuerzo) => {
         const res = await fetchConEspera(`${API}/chat/completions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...authHeaders() },
-            body: JSON.stringify(buildBody({ system, messages, schema, expectJson, maxTokens, temperature, hasImages, effort: esfuerzo })),
+            body: JSON.stringify(buildBody({ system, messages, schema, expectJson, maxTokens, temperature, hasImages, fast, effort: esfuerzo })),
         });
         if (!res.ok) {
             const detail = await res.text();

@@ -52,3 +52,25 @@ export function partialString(buffer, campo = 'reply') {
     }
     return out;
 }
+
+/**
+ * Lo que va ANTES de un campo, ya cerrado y parseado.
+ *
+ * La conversación por voz pide {"pensamiento","ops","encabezado","respuesta"}
+ * en ese orden. Cuando aparece la clave "respuesta", todo lo anterior ya está
+ * escrito: se puede aplicar el cambio en pantalla mientras el modelo todavía
+ * redacta lo que va a decir, en vez de esperar a que termine.
+ *
+ * Devuelve el objeto parcial, o null si todavía no se puede (o no parsea).
+ */
+export function objectBefore(buffer, campo) {
+    const m = new RegExp(`,\s*"${campo}"\s*:`).exec(buffer);
+    if (!m) return null;
+    const desde = buffer.indexOf('{');
+    if (desde === -1 || desde > m.index) return null;
+    try {
+        return JSON.parse(buffer.slice(desde, m.index) + '}');
+    } catch {
+        return null;
+    }
+}

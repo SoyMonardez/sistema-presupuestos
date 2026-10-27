@@ -98,6 +98,7 @@ contiene('plata y medida juntas: la medida como decimal',
 
 // ---- No debe romper texto sin números ----
 prueba('texto comun intacto', 'Dale, lo dejo como estaba', 'Dale, lo dejo como estaba');
+prueba('signos de pregunta y exclamación no cortan la voz', '¿Cuánto sale? ¡Decime!', 'Cuánto sale. Decime.');
 
 console.log(`\n${ok}/${total}`);
 process.exit(ok === total ? 0 : 1);

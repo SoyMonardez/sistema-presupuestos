@@ -417,12 +417,15 @@ function exportOriginalPDF(budget, items) {
 // ===================================================================
 // FORMATO MUNICIPAL — réplica fiel del presupuesto formal (blanco y negro,
 // HORIZONTAL / apaisado). Coordenadas en puntos extraídas del modelo real
-// (Plaza Juventudes). Página A4 landscape = 842 x 595 pt.
+// (Plaza Juventudes). También admite A4 vertical: conserva la estructura y
+// compacta las filas para que el presupuesto quede en una sola página.
 // ===================================================================
 function exportMunicipalPDF(budget, items) {
     const { jsPDF } = window.jspdf;
-    const doc = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'landscape' });
-    const PAGE_H = 595;
+    const portrait = budget.pdf_orientation === 'portrait';
+    const doc = new jsPDF({ unit: 'pt', format: 'a4', orientation: portrait ? 'portrait' : 'landscape' });
+    const PAGE_W = doc.internal.pageSize.getWidth();
+    const PAGE_H = doc.internal.pageSize.getHeight();
 
     const total = items.reduce((sum, i) => sum + i.quantity * i.unit_price, 0);
 
@@ -430,10 +433,19 @@ function exportMunicipalPDF(budget, items) {
     doc.setDrawColor(0);
     doc.setLineWidth(0.7);
 
+    // El modelo original está dibujado entre x=43 y x=800. En vertical se
+    // proyectan esas mismas columnas sobre el ancho de A4, sin cambiar su orden.
+    const REF_L = 43, REF_R = 800;
+    const edge = portrait ? 30 : REF_L;
+    const scaleX = portrait ? (PAGE_W - edge * 2) / (REF_R - REF_L) : 1;
+    const X = x => portrait ? edge + (x - REF_L) * scaleX : x;
+    const fontScale = portrait ? 0.82 : 1;
+
     // --- Columnas verticales de la grilla (X) ---
-    const L = 43, NUM_R = 71.6, DESC_R = 405.4, UNIT_R = 463.1,
-          QTY_R = 536.6, PU_R = 629.6, PI_R = 737.6, R = 800;
-    const ROW_H = 21.8, LINE_H = 10;
+    const L = X(43), NUM_R = X(71.6), DESC_R = X(405.4), UNIT_R = X(463.1),
+          QTY_R = X(536.6), PU_R = X(629.6), PI_R = X(737.6), R = X(800);
+    const ROW_H = portrait ? 16 : 21.8;
+    const LINE_H = portrait ? 7.2 : 10;
 
     // --- helpers ---
     const ln = (x0, y0, x1, y1) => doc.line(x0, y0, x1, y1);
@@ -442,26 +454,32 @@ function exportMunicipalPDF(budget, items) {
         txt = String(txt ?? '');
         doc.setFont('helvetica', b ? 'bold' : 'normal');
         if (cs) doc.setCharSpace(cs);
-        let s = size;
+        let s = size * fontScale;
         doc.setFontSize(s);
-        if (maxW) { while (s > 5.5 && doc.getTextWidth(txt) > maxW) { s -= 0.5; doc.setFontSize(s); } }
+        const minSize = portrait ? 3.8 : 5.5;
+        if (maxW) { while (s > minSize && doc.getTextWidth(txt) > maxW) { s -= 0.35; doc.setFontSize(s); } }
         doc.text(txt, x, y, { baseline: 'top', align });
         if (cs) doc.setCharSpace(0);
     }
+    function splitDescription(txt, maxW, size) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(size * fontScale);
+        return doc.splitTextToSize(String(txt || ''), maxW);
+    }
 
     // ===== Caja PRESUPUESTO + Fecha / Precio Total =====
-    box(611.4, 34.7, R, 62);
-    T('PRESUPUESTO', (611.4 + R) / 2, 36.5, { b: true, size: 13, align: 'center', cs: 1.9 });
-    T('Fecha:', 609, 68.8);
+    box(X(611.4), 34.7, R, 62);
+    T('PRESUPUESTO', (X(611.4) + R) / 2, 36.5, { b: true, size: 13, align: 'center', cs: portrait ? 1 : 1.9 });
+    T('Fecha:', X(609), 68.8);
     T(shortDateAR(new Date()), R, 68.8, { b: true, align: 'right' });
-    T('Precio Total:', 609, 83.8);
+    T('Precio Total:', X(609), 83.8);
     T(moneyAR(total), R, 83.8, { b: true, align: 'right' });
 
     // ===== Cabecera EMPRESA / CLIENTE =====
-    T('EMPRESA', 44.2, 111.3, { b: true, size: 8 });
-    T('CLIENTE', 428.6, 111.3, { b: true, size: 8 });
-    box(L, 122, 416, 222.8);      // caja EMPRESA
-    box(427.7, 122, R, 222.8);    // caja CLIENTE
+    T('EMPRESA', X(44.2), 111.3, { b: true, size: 8 });
+    T('CLIENTE', X(428.6), 111.3, { b: true, size: 8 });
+    box(L, 122, X(416), 222.8);      // caja EMPRESA
+    box(X(427.7), 122, R, 222.8);    // caja CLIENTE
 
     const ROWS_Y = [131.1, 146.1, 160.3, 174.6, 188.8, 203.8];
     const empPairs = [
@@ -472,8 +490,8 @@ function exportMunicipalPDF(budget, items) {
         ['Email:',     PDF_EMISOR.email],
     ];
     empPairs.forEach(([l, v], i) => {
-        T(l, 51, ROWS_Y[i], { b: true });
-        T(v, 155.5, ROWS_Y[i], { maxW: 416 - 155.5 - 4 });
+        T(l, X(51), ROWS_Y[i], { b: true });
+        T(v, X(155.5), ROWS_Y[i], { maxW: X(416) - X(155.5) - 4 });
     });
 
     const cliPairs = [
@@ -485,15 +503,15 @@ function exportMunicipalPDF(budget, items) {
         ['Email:',         budget.client_email],
     ];
     cliPairs.forEach(([l, v], i) => {
-        T(l, 435.4, ROWS_Y[i], { b: true });
-        T(v, 555.7, ROWS_Y[i], { maxW: R - 555.7 - 4 });
+        T(l, X(435.4), ROWS_Y[i], { b: true });
+        T(v, X(555.7), ROWS_Y[i], { maxW: R - X(555.7) - 4 });
     });
 
     // ===== OBRA =====
     box(L, 234, R, 260.2);
-    ln(96, 234, 96, 260.2); // divisor OBRA: | descripción
-    T('OBRA:', 51, 242, { b: true, size: 9 });
-    T((budget.name || ''), 229, 241, { b: true, size: 9.5, maxW: R - 229 - 6 });
+    ln(X(96), 234, X(96), 260.2); // divisor OBRA: | descripción
+    T('OBRA:', X(51), 242, { b: true, size: 9 });
+    T((budget.name || ''), X(229), 241, { b: true, size: 9.5, maxW: R - X(229) - 6 });
 
     // ===== Tabla: encabezado =====
     const HEAD_TOP = 271.5, HEAD_BOTTOM = 305.2;
@@ -518,12 +536,45 @@ function exportMunicipalPDF(budget, items) {
     }
     let rowTop = drawTableHead(HEAD_TOP);
 
-    // ===== Tabla: filas de items (sin filas en blanco) =====
-    items.forEach((item, i) => {
-        const descLines = doc.splitTextToSize(item.name || '', DESC_R - NUM_R - 12);
-        const rowH = Math.max(ROW_H, descLines.length * LINE_H + 10);
+    // En vertical todas las filas deben entrar antes del total y SON PESOS. Se
+    // calcula la densidad con los saltos reales de cada descripción; al reducir
+    // la fuente suelen desaparecer saltos y se recupera todavía más altura.
+    const totalRowH = portrait ? 16 : ROW_H;
+    const bottomMargin = portrait ? 26 : 60;
+    const footerHeight = totalRowH + 21.5 + 26;
+    const availableRowsH = PAGE_H - bottomMargin - footerHeight - HEAD_BOTTOM;
 
-        if (rowTop + rowH > PAGE_H - 60) {
+    function layoutRows(density = 1) {
+        const rowFont = portrait ? Math.max(5, 8.5 * density) : 8.5;
+        const lineH = portrait ? Math.max(4.8, LINE_H * density) : LINE_H;
+        const minH = portrait ? Math.max(8, ROW_H * density) : ROW_H;
+        const padding = portrait ? Math.max(3, 6 * density) : 10;
+        return items.map(item => {
+            const descLines = splitDescription(item.name || '', DESC_R - NUM_R - 12, rowFont);
+            return { item, descLines, rowFont, lineH, rowH: Math.max(minH, descLines.length * lineH + padding) };
+        });
+    }
+
+    let density = 1;
+    let rows = layoutRows(density);
+    if (portrait) {
+        for (let pass = 0; pass < 5; pass++) {
+            const used = rows.reduce((sum, row) => sum + row.rowH, 0);
+            if (used <= availableRowsH) break;
+            density *= availableRowsH / used;
+            rows = layoutRows(density);
+        }
+        const used = rows.reduce((sum, row) => sum + row.rowH, 0);
+        if (used > availableRowsH) {
+            const force = availableRowsH / used;
+            rows.forEach(row => { row.rowH *= force; row.lineH *= force; });
+        }
+    }
+
+    // ===== Tabla: filas de items (sin filas en blanco) =====
+    rows.forEach(({ item, descLines, rowFont, lineH, rowH }, i) => {
+
+        if (!portrait && rowTop + rowH > PAGE_H - 60) {
             doc.addPage();
             rowTop = drawTableHead(40);
         }
@@ -534,30 +585,35 @@ function exportMunicipalPDF(budget, items) {
 
         const itemTotal = item.quantity * item.unit_price;
         const incidencia = total > 0 ? (itemTotal / total) * 100 : 0;
-        T(String(i + 1), (L + NUM_R) / 2, yT + 5.4, { b: true, size: 9, align: 'center' });
-        descLines.forEach((dl, k) => T(dl, NUM_R + 6.3, yT + 5.1 + k * LINE_H, { size: 8.5 }));
-        T(item.unit || '', (DESC_R + UNIT_R) / 2, yT + 5.4, { size: 9, align: 'center' });
-        T(qtyAR(item.quantity), QTY_R - 5, yT + 5.4, { size: 9, align: 'right' });
-        T(moneyAR(item.unit_price), PU_R - 5, yT + 5.4, { size: 9, align: 'right' });
-        T(moneyAR(itemTotal), PI_R - 5, yT + 5.4, { size: 9, align: 'right' });
-        T(pctAR(incidencia), R - 5, yT + 5.4, { size: 9, align: 'right' });
+        const textY = yT + (portrait ? Math.max(2, Math.min(4.1, rowH * 0.25)) : 5.4);
+        T(String(i + 1), (L + NUM_R) / 2, textY, { b: true, size: portrait ? rowFont : 9, align: 'center' });
+        descLines.forEach((dl, k) => T(dl, NUM_R + (portrait ? 4 : 6.3), textY + k * lineH, { size: rowFont }));
+        T(item.unit || '', (DESC_R + UNIT_R) / 2, textY, { size: portrait ? rowFont : 9, align: 'center' });
+        T(qtyAR(item.quantity), QTY_R - 4, textY, { size: portrait ? rowFont : 9, align: 'right' });
+        T(moneyAR(item.unit_price), PU_R - 4, textY, { size: portrait ? rowFont : 9, align: 'right' });
+        T(moneyAR(itemTotal), PI_R - 4, textY, { size: portrait ? rowFont : 9, align: 'right' });
+        T(pctAR(incidencia), R - 4, textY, { size: portrait ? rowFont : 9, align: 'right' });
         rowTop = yB;
     });
 
     // ===== Fila de total (PRECIO ITEMS + % = 100%) =====
-    const totT = rowTop, totB = rowTop + ROW_H;
+    if (!portrait && rowTop + footerHeight > PAGE_H - 18) {
+        doc.addPage();
+        rowTop = drawTableHead(40);
+    }
+    const totT = rowTop, totB = rowTop + totalRowH;
     box(PU_R, totT, PI_R, totB);  // celda total
     box(PI_R, totT, R, totB);     // celda 100%
     T(moneyAR(total), PI_R - 5, totT + 4.9, { b: true, size: 9.5, align: 'right' });
     T(pctAR(total > 0 ? 100 : 0), R - 5, totT + 4.9, { b: true, size: 9.5, align: 'right' });
 
     // ===== Aclaración IVA (a la izquierda, sin recuadro) =====
-    T('LOS PRECIOS UNITARIOS INCLUYEN IVA', 42.8, totB + 3.3, { b: true, size: 8 });
+    T('LOS PRECIOS UNITARIOS INCLUYEN IVA', L, totB + 3.3, { b: true, size: 8 });
 
     // ===== Caja SON PESOS (monto en letras) =====
     const spTop = totB + 21.5;
     box(L, spTop, R, spTop + 26);
-    T('SON PESOS: ' + montoEnLetras(total), 51, spTop + 7.6, { b: true, size: 9, maxW: R - 51 - 8 });
+    T('SON PESOS: ' + montoEnLetras(total), X(51), spTop + 7.6, { b: true, size: 9, maxW: R - X(51) - 8 });
 
     // ===== Guardar =====
     doc.save(pdfFileName(budget));

@@ -62,6 +62,24 @@ const API = {
         if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
         return data;
     },
+    // `rapida`: voz de baja latencia (Flash), la que usa la conversación en vivo.
+    async aiSpeak(text, signal, { rapida = false } = {}) {
+        const res = await fetch('/api/ai/speak', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.getToken()}` },
+            body: JSON.stringify({ text, rapida: rapida || undefined }), signal,
+        });
+        if (res.status === 401) {
+            this.clearToken();
+            window.dispatchEvent(new Event('auth-expired'));
+            throw new Error('Sesión vencida');
+        }
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.error || `Error ${res.status}`);
+        }
+        return res.blob();
+    },
     aiSuggest(query, items) { return this.request('/api/ai/suggest', { method: 'POST', body: JSON.stringify({ query, items }) }); },
     aiSpellcheck(texts)     { return this.request('/api/ai/spellcheck', { method: 'POST', body: JSON.stringify({ texts }) }); },
     aiClientData(name)      { return this.request('/api/ai/client-data', { method: 'POST', body: JSON.stringify({ name }) }); },
@@ -83,13 +101,14 @@ const API = {
      * de la respuesta a mano.
      * @returns el mismo objeto que sendChatMessage
      */
-    async streamChatMessage(chatId, text, itemNum, onDelta, image, onStatus) {
+    async streamChatMessage(chatId, text, itemNum, onDelta, image, onStatus, signal) {
         const res = await fetch(`/api/chats/${chatId}/messages/stream`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.getToken()}` },
             // La foto viaja en base64 dentro del JSON. Ya viene achicada del
             // navegador (~150 kb), así que no hace falta multipart ni body crudo.
             body: JSON.stringify({ text, item_num: itemNum || undefined, image: image || undefined }),
+            signal,
         });
         if (res.status === 401) {
             this.clearToken();
@@ -126,6 +145,64 @@ const API = {
                 // En qué anda: "buscando en internet", "redactando". Es lo que
                 // hace que una búsqueda de diez segundos no parezca un cuelgue.
                 else if (evento === 'status') onStatus?.(payload);
+                else if (evento === 'done') final = payload;
+                else if (evento === 'error') error = payload.error;
+            }
+        }
+
+        if (error) throw new Error(error);
+        if (!final) throw new Error('La respuesta se cortó. Probá de nuevo.');
+        return final;
+    },
+
+    // ---- Conversación por voz ----
+    vozToken()          { return this.request('/api/voz/token', { method: 'POST' }); },
+    vozCortar(body)     { return this.request('/api/voz/cortar', { method: 'POST', body: JSON.stringify(body) }); },
+    /**
+     * Un turno de la conversación por voz. Mismo SSE leído a mano que
+     * streamChatMessage, con sus propios eventos: "pensamiento" (lo que va a
+     * hacer, en pedazos), "ops" (los cambios ya validados), "respuesta" (lo que
+     * va a decir, en pedazos) y "done".
+     */
+    async streamVozTurno(body, { onPensamiento, onOps, onRespuesta } = {}, signal) {
+        const res = await fetch('/api/voz/turno', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.getToken()}` },
+            body: JSON.stringify(body),
+            signal,
+        });
+        if (res.status === 401) {
+            this.clearToken();
+            window.dispatchEvent(new Event('auth-expired'));
+            throw new Error('Sesión vencida');
+        }
+        if (!res.ok || !res.body) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.error || `Error ${res.status}`);
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let final = null;
+        let error = null;
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const bloques = buffer.split('\n\n');
+            buffer = bloques.pop() || '';
+            for (const bloque of bloques) {
+                const evento = bloque.match(/^event:\s*(.+)$/m)?.[1]?.trim();
+                const datos = bloque.match(/^data:\s*(.+)$/m)?.[1];
+                if (!evento || !datos) continue;
+                let payload;
+                try { payload = JSON.parse(datos); } catch { continue; }
+
+                if (evento === 'pensamiento') onPensamiento?.(payload.text);
+                else if (evento === 'ops') onOps?.(payload);
+                else if (evento === 'respuesta') onRespuesta?.(payload.text);
                 else if (evento === 'done') final = payload;
                 else if (evento === 'error') error = payload.error;
             }

@@ -22,6 +22,11 @@ const DEFAULT_ROUTES = {
     command:     'claude',
     chat:        'claude',
     vision:      'claude',
+    // Conversación por voz: el cortador tiene que contestar en una fracción de
+    // segundo (decide qué parte de lo dictado ya es un pedido entero); el que
+    // decide los items y la plata es el mismo Claude de siempre.
+    voz_cortar:  'groq',
+    voz_turno:   'claude',
 };
 
 // Valores por defecto razonables para cada tarea, pisables desde el que llama.
@@ -49,6 +54,11 @@ const TASK_DEFAULTS = {
     // se paga en números inventados.
     chat:        { maxTokens: 3500, temperature: 0.15, effort: 'high' },
     vision:      { maxTokens: 4000, temperature: 0.1,  effort: 'high' },
+    // El cortador no piensa: separa frases. `fast` usa GROQ_FAST_MODEL si está.
+    voz_cortar:  { maxTokens: 400,  temperature: 0,    effort: 'low', fast: true },
+    // Por voz los pedidos vienen con los números dichos ("uno, metro cuadrado,
+    // 320 mil"): hay poco que deducir y cada segundo de espera se escucha.
+    voz_turno:   { maxTokens: 2000, temperature: 0.1,  effort: 'low' },
 };
 
 const warned = new Set();
@@ -104,6 +114,7 @@ export async function complete({ task, system, messages, schema, expectJson, max
         maxTokens:   maxTokens   ?? defaults.maxTokens,
         temperature: temperature ?? defaults.temperature,
         effort:      effort      ?? defaults.effort,
+        fast:        defaults.fast,
     });
 }
 
@@ -127,6 +138,7 @@ export async function completeStream({ task, system, messages, schema, expectJso
         maxTokens:   maxTokens   ?? defaults.maxTokens,
         temperature: temperature ?? defaults.temperature,
         effort:      effort      ?? defaults.effort,
+        fast:        defaults.fast,
     };
 
     if (provider.supportsStream && provider.completeStream) {
@@ -143,6 +155,6 @@ export function routingSummary() {
     }, {});
 }
 
-// Whisper y la búsqueda web son específicas de Groq, no se rutean.
+// Whisper sigue siendo específico de Groq; la búsqueda web la hace Sonnet.
 export const transcribeAudio = groq.transcribeAudio;
-export const webSearch = groq.webSearch;
+export const webSearch = claude.webSearch;

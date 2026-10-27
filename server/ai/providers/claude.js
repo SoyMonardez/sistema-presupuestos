@@ -115,6 +115,39 @@ export async function complete({ system, messages, schema, expectJson = false, m
     return parseJsonFlexible(text, { lax: laxFallback });
 }
 
+/**
+ * Búsqueda web hecha por Sonnet. La herramienta es del servidor de Claude: el
+ * modelo busca, lee los resultados y devuelve una síntesis con las fuentes.
+ */
+export async function webSearch(query) {
+    const response = await getClient().messages.create({
+        model: MODEL,
+        max_tokens: 1000,
+        system: 'Sos un investigador de costos, técnicas y normativa de construcción en Argentina. Buscá en la web antes de responder. Contestá la consulta con datos concretos, fecha cuando aplique y aclarando incertidumbres. Si falta un dato, explicá qué rango o información sí encontraste y hacé una sola pregunta puntual. Nunca digas que la búsqueda se cortó. No inventes fuentes.',
+        messages: [{ role: 'user', content: String(query).slice(0, 500) }],
+        tools: [{
+            type: 'web_search_20260318',
+            name: 'web_search',
+            max_uses: 1,
+            user_location: { type: 'approximate', country: 'AR', timezone: 'America/Argentina/Buenos_Aires' },
+        }],
+        // En Investigación la búsqueda no es opcional: primero consulta fuentes
+        // y recién después redacta la respuesta.
+        tool_choice: { type: 'any' },
+    }, { timeout: 45000 });
+
+    if (response.stop_reason === 'refusal') {
+        throw new Error('Claude rechazó la investigación por sus filtros de seguridad. Reformulá la consulta.');
+    }
+
+    const sources = response.content.flatMap(block => {
+        if (block.type !== 'web_search_tool_result' || !Array.isArray(block.content)) return [];
+        return block.content.map(result => ({ title: result.title, url: result.url }));
+    }).filter(source => source.url);
+    const text = extractText(response.content);
+    if (!text) throw new Error('Claude no devolvió una respuesta después de buscar.');
+    return { text, sources };
+}
 // Las tareas que piden JSON por prompt en vez de por schema (las operaciones de
 // edición — ver server/ai/schemas.js) a veces vienen envueltas en ```json … ```,
 // o con alguna palabra suelta antes o después a pesar de que el prompt pide

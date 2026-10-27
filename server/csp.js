@@ -55,8 +55,12 @@ export function buildCsp(indexPath) {
         // data: para el favicon SVG y las fotos en base64; blob: para la vista
         // previa de lo que se adjunta en el chat.
         "img-src 'self' data: blob:",
+        // El audio de ElevenLabs llega como Blob creado en el navegador.
+        "media-src 'self' blob:",
         "font-src 'self'",
-        "connect-src 'self'",
+        // El WebSocket de Scribe (voz a texto en vivo) va directo a ElevenLabs con
+        // un token de un solo uso que da el servidor.
+        "connect-src 'self' wss://api.elevenlabs.io",
         // Nada de esta app va adentro de un iframe.
         "frame-ancestors 'none'",
         "base-uri 'self'",

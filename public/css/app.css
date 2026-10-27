@@ -298,7 +298,8 @@ body {
     border-radius: 12px;
     padding: 5px;
 }
-.format-btn {
+.format-btn,
+.orientation-btn {
     flex: 1;
     border: none;
     background: transparent;
@@ -310,7 +311,8 @@ body {
     cursor: pointer;
     transition: background .15s, color .15s;
 }
-.format-btn.active { background: var(--primary); color: #fff; }
+.format-btn.active,
+.orientation-btn.active { background: var(--primary); color: #fff; }
 
 /* El botón que ofrece pasar de charla a armar el presupuesto de verdad */
 .chat-card-switch {
@@ -352,26 +354,13 @@ body {
     50%      { box-shadow: 0 0 0 8px rgba(232,93,93,0); }
 }
 
-.ai-panel, .draft-panel {
+.draft-panel {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 14px;
     margin-bottom: 14px;
 }
-.ai-panel textarea {
-    width: 100%;
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    color: var(--text);
-    font-size: 16px;
-    font-family: inherit;
-    padding: 12px;
-    resize: vertical;
-    margin-bottom: 10px;
-}
-.ai-panel textarea:focus { outline: 2px solid var(--primary); }
 .ai-panel-actions { display: flex; gap: 10px; justify-content: flex-end; }
 .ai-panel-actions .btn { padding: 10px 16px; font-size: 15px; }
 
@@ -1627,6 +1616,7 @@ body.modal-open { overflow: hidden; }
     -webkit-tap-highlight-color: transparent;
 }
 .chat-send:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; }
+.chat-send.detener { background: var(--danger, #d9534f); }
 .chat-attach {
     flex: 0 0 auto;
     width: 44px; height: 44px;
@@ -1837,8 +1827,7 @@ body.modal-open { overflow: hidden; }
 /* Los títulos de columna de los items solo existen en escritorio. */
 .items-head { display: none; }
 
-/* ===================================================================
-   ESCRITORIO (≥ 1200px)
+/* ============================================================   ESCRITORIO (≥ 1200px)
 
    Todo el rediseño vive acá adentro, así que el celular y la tablet no
    cambian en nada. La idea: aprovechar el ancho en vez de estirar la columna
@@ -2085,4 +2074,261 @@ body.modal-open { overflow: hidden; }
     .chat-scroll { padding: 16px 20px 4px; }
     .chat-input { font-size: 15px; }   /* en un panel angosto el placeholder no entra a 16px */
     .chat-msg { max-width: 92%; }
+=======
+/* ===================================================================
+   Modo conversación por voz
+   ===================================================================
+   Tiene que reconocerse de lejos: el borde de toda la pantalla brilla con el
+   color de la fase, y el orbe de abajo cambia de color y de movimiento. Los
+   colores de cada fase están acá (--voz-a / --voz-b) y orbe.js los lee para
+   pintar el canvas, así que van en hex de 6 dígitos. */
+.voz-modo { --voz-a: #38bdf8; --voz-b: #6366f1; }
+.voz-modo[data-fase="escuchando"] { --voz-a: #38bdf8; --voz-b: #6366f1; }
+.voz-modo[data-fase="pensando"]   { --voz-a: #a855f7; --voz-b: #6366f1; }
+.voz-modo[data-fase="haciendo"]   { --voz-a: #f59e0b; --voz-b: #ef4444; }
+.voz-modo[data-fase="hablando"]   { --voz-a: #2dd4bf; --voz-b: #22c55e; }
+.voz-modo[data-fase="esperando"]  { --voz-a: #f59e0b; --voz-b: #a855f7; }
+
+.voz-borde {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 70;
+    box-shadow: inset 0 0 0 3px var(--voz-a), inset 0 0 38px 4px color-mix(in srgb, var(--voz-a) 55%, transparent);
+    transition: box-shadow .5s ease;
+    animation: vozRespira 2.6s ease-in-out infinite;
+}
+@keyframes vozRespira {
+    0%, 100% { opacity: .75; }
+    50%      { opacity: 1; }
+}
+
+.voz-panel {
+    position: fixed;
+    left: 50%;
+    bottom: 0;
+    transform: translateX(-50%);
+    width: min(560px, 100%);
+    z-index: 71;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+    background: color-mix(in srgb, var(--surface) 88%, transparent);
+    -webkit-backdrop-filter: blur(14px);
+    backdrop-filter: blur(14px);
+    border: 1px solid color-mix(in srgb, var(--voz-a) 40%, var(--border));
+    border-bottom: 0;
+    border-radius: 22px 22px 0 0;
+    box-shadow: 0 -8px 30px rgba(0,0,0,.18);
+    animation: vozSube .35s cubic-bezier(.2,.9,.3,1.2);
+    transition: border-color .5s;
+}
+@keyframes vozSube {
+    from { transform: translate(-50%, 100%); }
+    to   { transform: translate(-50%, 0); }
+}
+
+/* Mientras conversa, la lista tiene que poder verse entera por encima del panel. */
+body.voz-activa #pane-budget { padding-bottom: 46vh; }
+body.voz-activa .tabbar,
+body.voz-activa .totalbar { visibility: hidden; }
+
+.voz-tarjetas {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 30vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+.voz-tarjetas:empty { display: none; }
+
+.voz-tarjeta {
+    --voz-tarjeta: #a855f7;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--voz-tarjeta);
+    border-radius: 12px;
+    padding: 9px 12px;
+    font-size: 14px;
+    animation: vozTarjetaEntra .3s ease-out;
+}
+@keyframes vozTarjetaEntra {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: none; }
+}
+.voz-tarjeta.propuesta  { --voz-tarjeta: #f59e0b; }
+.voz-tarjeta.haciendo   { --voz-tarjeta: #f59e0b; }
+.voz-tarjeta.aplicada   { --voz-tarjeta: var(--green); }
+.voz-tarjeta.info       { --voz-tarjeta: #14b8a6; }
+.voz-tarjeta.descartada { --voz-tarjeta: var(--text-dim); opacity: .6; }
+.voz-tarjeta.error      { --voz-tarjeta: var(--red); }
+
+.voz-t-cabeza {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--voz-tarjeta);
+}
+.voz-t-punto {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--voz-tarjeta);
+}
+.voz-tarjeta.pensando .voz-t-punto,
+.voz-tarjeta.haciendo .voz-t-punto { animation: vozPunto .9s ease-in-out infinite; }
+@keyframes vozPunto {
+    0%, 100% { transform: scale(.7); opacity: .6; }
+    50%      { transform: scale(1.2); opacity: 1; }
+}
+.voz-t-pedido { color: var(--text-dim); font-size: 13px; margin-top: 4px; }
+.voz-t-pensamiento { margin-top: 4px; white-space: pre-line; line-height: 1.4; }
+.voz-t-pensamiento:empty { display: none; }
+.voz-tarjeta.descartada .voz-t-pensamiento { text-decoration: line-through; }
+.voz-t-acciones { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.voz-t-acciones[hidden] { display: none; }
+.voz-t-acciones button {
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text);
+    border-radius: 999px;
+    padding: 8px 18px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.voz-t-acciones .voz-t-aplicar { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+
+.voz-subtitulo {
+    min-height: 1.4em;
+    text-align: center;
+    font-size: 16px;
+    line-height: 1.4;
+    color: var(--text);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+.voz-subtitulo.provisorio { color: var(--text-dim); font-style: italic; }
+
+.voz-barra {
+    display: grid;
+    grid-template-columns: 52px 1fr 52px;
+    align-items: center;
+}
+.voz-centro {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+}
+.voz-orbe { width: 104px; height: 104px; display: block; }
+.voz-fase {
+    font-size: 13px;
+    font-weight: 700;
+    color: color-mix(in srgb, var(--voz-a) 70%, var(--text));
+    transition: color .4s;
+}
+
+.voz-btn {
+    width: 52px; height: 52px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+.voz-btn:disabled { opacity: .35; cursor: default; }
+.voz-btn:active:not(:disabled) { transform: scale(.94); }
+.voz-btn-salir { background: color-mix(in srgb, var(--red) 14%, var(--surface-2)); color: var(--red); }
+
+.voz-auto {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-dim);
+    cursor: pointer;
+    user-select: none;
+}
+.voz-auto input { position: absolute; opacity: 0; pointer-events: none; }
+.voz-auto-track {
+    width: 38px; height: 22px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    position: relative;
+    transition: background .2s;
+}
+.voz-auto-thumb {
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    transition: transform .2s, background .2s;
+}
+.voz-auto input:checked + .voz-auto-track { background: color-mix(in srgb, var(--green) 30%, var(--surface-2)); }
+.voz-auto input:checked + .voz-auto-track .voz-auto-thumb { transform: translateX(16px); background: var(--green); }
+.voz-auto input:focus-visible + .voz-auto-track { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* El botón que lo prende: un orbe chiquito que ya anticipa el modo. */
+.tool-btn-conversar {
+    border-color: color-mix(in srgb, #6366f1 45%, var(--border));
+    background: linear-gradient(135deg, color-mix(in srgb, #38bdf8 10%, var(--surface)), color-mix(in srgb, #6366f1 12%, var(--surface)));
+}
+.conversar-orbe {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #ffffff88 0, transparent 45%), linear-gradient(135deg, #38bdf8, #6366f1);
+    box-shadow: 0 0 10px #6366f180;
+    animation: vozRespira 2.6s ease-in-out infinite;
+}
+.tool-btn-conversar.activo { border-color: #38bdf8; box-shadow: 0 0 0 3px #38bdf833; }
+
+/* ---------- Lo que hace en la lista ---------- */
+.item-card.voz-alta { animation: vozAlta 1.6s ease-out; }
+@keyframes vozAlta {
+    0%   { opacity: 0; transform: translateY(14px) scale(.97); box-shadow: 0 0 0 0 #f59e0b00; }
+    18%  { opacity: 1; transform: none; box-shadow: 0 0 0 3px #f59e0bcc, 0 0 26px #f59e0b88; }
+    70%  { box-shadow: 0 0 0 3px #f59e0b88, 0 0 18px #f59e0b44; }
+    100% { box-shadow: var(--shadow); }
+}
+.item-card.voz-cambio { animation: vozCambio 1.4s ease-out; }
+@keyframes vozCambio {
+    0%, 30% { box-shadow: 0 0 0 3px #a855f7cc, 0 0 22px #a855f777; }
+    100%    { box-shadow: var(--shadow); }
+}
+.voz-campo { animation: vozCampo 1.4s ease-out; }
+@keyframes vozCampo {
+    0%, 35% { background-color: color-mix(in srgb, #f59e0b 30%, transparent); }
+    100%    { background-color: transparent; }
+}
+.item-card.voz-baja {
+    animation: vozBaja .42s ease-in forwards;
+    pointer-events: none;
+}
+@keyframes vozBaja {
+    to { opacity: 0; transform: translateX(30px) scale(.95); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .voz-borde, .conversar-orbe, .voz-t-punto { animation: none !important; }
+    .voz-panel, .voz-tarjeta { animation: none; }
+    .item-card.voz-alta, .item-card.voz-cambio, .voz-campo {
+        animation: none;
+        outline: 3px solid #f59e0b;
+        outline-offset: 2px;
+    }
 }

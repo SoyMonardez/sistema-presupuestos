@@ -1,47 +1,13 @@
-// Las tres formas de meter items sin escribirlos a mano: texto libre, dictado y
-// archivo/foto.
+// Meter items sin escribirlos a mano desde un archivo o una foto.
 //
-// Son tres entradas distintas pero terminan igual: producen operaciones y las
-// mandan al panel de borrador para que él confirme. Ninguna toca los items por su
-// cuenta.
+// Produce operaciones y las manda al panel de borrador para que él confirme: no
+// toca los items por su cuenta. (El texto libre y el dictado que vivían acá se
+// sacaron: los reemplazó el modo conversación, ver conversacion.js.)
 
 const Entradas = (() => {
     const { $, toast } = UI;
 
     const items = Estado.lista();   // identidad estable, ver estado.js
-
-    // ================= Texto libre → IA =================
-    function ocultarPanel() { $('#ai-panel').hidden = true; }
-
-    $('#btn-ai-text').addEventListener('click', () => {
-        Borrador.ocultar();
-        $('#ai-panel').hidden = false;
-        $('#ai-text').focus();
-    });
-    $('#btn-ai-cancel').addEventListener('click', ocultarPanel);
-
-    $('#btn-ai-send').addEventListener('click', async () => {
-        const text = $('#ai-text').value.trim();
-        if (!text) return;
-        const btn = $('#btn-ai-send');
-        btn.disabled = true;
-        btn.textContent = 'Procesando…';
-        try {
-            const { ops, summary } = await API.aiCommand(text, items);
-            if (!ops.length) {
-                toast(summary || 'La IA no encontró cambios para hacer', true);
-            } else {
-                $('#ai-text').value = '';
-                ocultarPanel();
-                Borrador.mostrar(ops, summary);
-            }
-        } catch (err) {
-            toast(err.message, true);
-        } finally {
-            btn.disabled = false;
-            btn.textContent = 'Aplicar con IA';
-        }
-    });
 
     // ================= Importar archivo (PDF / Excel / CSV / foto) =================
     const EXT_ARCHIVO = ['pdf', 'xlsx', 'csv'];
@@ -100,7 +66,6 @@ const Entradas = (() => {
         const prev = lbl.textContent;
         btn.disabled = true;
         lbl.textContent = 'Leyendo…';
-        ocultarPanel();
         Borrador.ocultar();
         try {
             if (importMode === 'changes') {
@@ -134,56 +99,5 @@ const Entradas = (() => {
         }
     });
 
-    // ================= Voz =================
-    const voiceBtn = $('#btn-voice');
-    const voiceLabel = $('#voice-label');
-
-    voiceBtn.addEventListener('click', () => {
-        if (!Voice.isSupported()) {
-            toast('Tu navegador no soporta grabación de audio. Actualizalo.', true);
-            return;
-        }
-        if (Voice.isActive()) {
-            Voice.stop();
-            return;
-        }
-        ocultarPanel();
-        Borrador.ocultar();
-
-        Voice.start({
-            onTick(secs) {
-                voiceBtn.classList.add('recording');
-                const mm = String(Math.floor(secs / 60));
-                const ss = String(secs % 60).padStart(2, '0');
-                voiceLabel.textContent = `Grabando ${mm}:${ss} — tocá para parar`;
-            },
-            async onStop(blob) {
-                voiceBtn.classList.remove('recording');
-                if (blob.size < 1500) {
-                    voiceLabel.textContent = 'Dictar';
-                    toast('La grabación quedó muy corta', true);
-                    return;
-                }
-                voiceLabel.textContent = 'Transcribiendo…';
-                try {
-                    const { text } = await API.aiTranscribe(blob);
-                    voiceLabel.textContent = 'Armando items…';
-                    const { ops, summary } = await API.aiCommand(text, items);
-                    if (!ops.length) toast(summary || `Se escuchó "${text.slice(0, 60)}" pero no se encontraron cambios`, true);
-                    else Borrador.mostrar(ops, summary);
-                } catch (err) {
-                    toast(err.message, true);
-                } finally {
-                    voiceLabel.textContent = 'Dictar';
-                }
-            },
-            onError(msg) {
-                voiceBtn.classList.remove('recording');
-                voiceLabel.textContent = 'Dictar';
-                toast(msg, true);
-            },
-        });
-    });
-
-    return { ocultarPanel };
+    return {};
 })();

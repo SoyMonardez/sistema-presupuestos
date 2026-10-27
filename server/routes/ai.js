@@ -1,6 +1,7 @@
 import express from 'express';
 import { Router } from 'express';
 import { complete, transcribeAudio } from '../ai/provider.js';
+import { isConfigured as vozConfigurada, synthesize } from '../ai/elevenlabs.js';
 import { ITEMS_SCHEMA, TEXTS_SCHEMA, SUGGESTIONS_SCHEMA, CLIENT_SCHEMA } from '../ai/schemas.js';
 import { normalizeOps } from '../lib/ops.js';
 import { canonicalLabel } from '../lib/units.js';
@@ -67,6 +68,23 @@ router.post('/transcribe', rawAudio, workspace, async (req, res) => {
     }
 });
 
+// Audio de respuesta: la clave de ElevenLabs nunca sale del servidor.
+router.post('/speak', async (req, res) => {
+    const text = String(req.body?.text || '').trim();
+    if (!text) return res.status(400).json({ error: 'Falta el texto a leer' });
+    if (text.length > 3000) return res.status(400).json({ error: 'El mensaje es demasiado largo para leerlo' });
+    if (!vozConfigurada()) return res.status(503).json({ error: 'La voz paga no está configurada' });
+    try {
+        // `rapida`: la conversación por voz pide Flash, que arranca a hablar en
+        // una fracción del tiempo. La lectura de mensajes sigue con la voz buena.
+        const audio = await synthesize(text, { rapida: req.body?.rapida === true });
+        res.set({ 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store' });
+        res.send(audio);
+    } catch (err) {
+        console.error('[ai/speak]', err.message);
+        res.status(502).json({ error: 'No se pudo generar el audio. Probá de nuevo.' });
+    }
+});
 // Convierte texto libre (o tabla cruda de un archivo) en items estructurados.
 export async function parseItemsFromText(text, maxItems = 200) {
     const catalog = loadUnitCatalog();
@@ -173,12 +191,10 @@ router.post('/client-data', async (req, res) => {
     }
 });
 
-const COMMAND_SYSTEM = `Sos un asistente que edita presupuestos de construcción ya cargados por un presupuestista argentino. Te paso el estado actual de los items (numerados 1,2,3... tal como los ve el usuario en la pantalla) y una instrucción en español, a veces informal o mal escrita, y vos devolvés los cambios a aplicar.
-
-Reglas:
-- Devolvé SOLO un JSON con esta forma exacta: {"ops":[...],"summary":"..."}
-- "summary": una sola oración en español explicando qué hiciste (o por qué no pudiste), para mostrarle al usuario antes de que confirme.
-- Cada elemento de "ops" es uno de estos 4 tipos:
+// Las cuatro operaciones que entiende server/lib/ops.js, explicadas para el
+// modelo. Las comparten el comando de texto y la conversación por voz
+// (routes/voz.js): si cambia el formato de una op, cambia en los dos a la vez.
+export const OPS_FORMATO = `- Cada elemento de "ops" es uno de estos 4 tipos:
 
 1) Agregar item nuevo: {"action":"add","item":{"name":"...","detail":"...","quantity":N,"unit":"...","unit_price":N}}
    Usalo para pedidos de agregar trabajos nuevos (ej "agregá 20 m² de contrapiso a 15 lucas el metro"), con la jerga de plata que ya conocés (luca=1000, palo=1000000, gamba=100, k=1000) y estimando precio de mercado realista si no lo dan.
@@ -202,7 +218,14 @@ Reglas:
 
    Sacá las medidas de la instrucción del usuario o del "name"/"detail" del item. Si no están, NO las inventes: mandá igual la operación sin la medida y el sistema le va a avisar al usuario qué falta.
 
-- Si el pedido no tiene relación con el presupuesto o no entendés qué hacer, devolvé {"ops":[],"summary":"No entendí el pedido, ¿podés reformularlo?"}.
+`;
+
+const COMMAND_SYSTEM = `Sos un asistente que edita presupuestos de construcción ya cargados por un presupuestista argentino. Te paso el estado actual de los items (numerados 1,2,3... tal como los ve el usuario en la pantalla) y una instrucción en español, a veces informal o mal escrita, y vos devolvés los cambios a aplicar.
+
+Reglas:
+- Devolvé SOLO un JSON con esta forma exacta: {"ops":[...],"summary":"..."}
+- "summary": una sola oración en español explicando qué hiciste (o por qué no pudiste), para mostrarle al usuario antes de que confirme.
+${OPS_FORMATO}- Si el pedido no tiene relación con el presupuesto o no entendés qué hacer, devolvé {"ops":[],"summary":"No entendí el pedido, ¿podés reformularlo?"}.
 - Nunca devuelvas más de 30 operaciones de una vez.`;
 
 export async function runCommand(text, currentItems) {
