@@ -19,7 +19,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%234f7cff' stroke-width='1.6' stroke-linecap='round'%3E%3Crect x='4' y='2' width='16' height='20' rx='2'/%3E%3Cline x1='8' y1='7' x2='16' y2='7'/%3E%3Cline x1='8' y1='11' x2='16' y2='11'/%3E%3Cline x1='8' y1='15' x2='12' y2='15'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="css/app.css?v=28">
+<link rel="stylesheet" href="css/app.css?v=29">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
 </head>
@@ -481,6 +481,13 @@
 <div id="voz-modo" class="voz-modo" data-fase="escuchando" hidden>
     <div class="voz-borde" aria-hidden="true"></div>
     <div class="voz-panel" role="region" aria-label="Conversación por voz">
+        <!-- Deslizar la manija (celular) o tocar el botón deja solo el orbe flotando -->
+        <div class="voz-cabeza" id="voz-cabeza">
+            <span class="voz-grip" aria-hidden="true"></span>
+            <button id="voz-minimizar" class="voz-mini-btn" type="button" title="Dejar solo el orbe flotando" aria-label="Dejar solo el orbe flotando">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l7-7"/><path d="M3 21l7-7"/></svg>
+            </button>
+        </div>
         <div id="voz-tarjetas" class="voz-tarjetas" aria-live="polite"></div>
         <p id="voz-subtitulo" class="voz-subtitulo"></p>
         <div class="voz-barra">
@@ -501,6 +508,8 @@
             <span>Auto: aplicar sin preguntar</span>
         </label>
     </div>
+    <!-- El orbe solo, flotando. Se arrastra a donde quieras; tocarlo abre el panel. -->
+    <button id="voz-flotante" class="voz-flotante" type="button" title="Abrir la conversación (arrastrá para moverlo)" aria-label="Abrir la conversación" hidden></button>
 </div>
 
 <!-- El orden importa: cada archivo usa los de arriba en el momento de cargarse
@@ -510,7 +519,7 @@
 <script src="js/ui.js"></script>
 <script src="js/medidas.js"></script>
 <script src="js/theme.js"></script>
-<script src="js/api.js?v=25"></script>
+<script src="js/api.js?v=29"></script>
 <script src="js/nav.js"></script>
 <script src="js/estado.js?v=25"></script>
 <script src="js/unidades.js"></script>
@@ -525,9 +534,9 @@
 <script src="js/hablar.js?v=25"></script>
 <!-- La conversación por voz: usa Hablar, Estado e Items, y la pega app.js. -->
 <script src="js/sonidos.js?v=25"></script>
-<script src="js/escucha.js?v=25"></script>
-<script src="js/orbe.js?v=25"></script>
-<script src="js/conversacion.js?v=26"></script>
+<script src="js/escucha.js?v=29"></script>
+<script src="js/orbe.js?v=29"></script>
+<script src="js/conversacion.js?v=29"></script>
 <script src="js/app.js?v=26"></script>
 <script>
 if ('serviceWorker' in navigator) {

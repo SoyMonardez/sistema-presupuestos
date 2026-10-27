@@ -313,32 +313,70 @@ export async function webSearch(query, { maxTokens = 900 } = {}) {
     };
 }
 
+// La conversación por voz manda pedazos cortos, sin el contexto de una frase
+// larga: ahí la versión completa de Whisper se equivoca bastante menos que la
+// turbo, y en Groq la diferencia de tiempo en unos segundos de audio es poca.
+const WHISPER_VOZ_MODEL = process.env.GROQ_WHISPER_VOZ_MODEL || 'whisper-large-v3';
+
 /**
  * Transcripción de audio con Whisper. Es específica de Groq (anda muy bien y sale
  * centavos), así que no pasa por el ruteo de proveedores.
+ *
+ * Opciones para la conversación por voz:
+ *   prompt  → términos que tiene que esperar oír (ver lib/vocabulario.js).
+ *   filtrar → pide el detalle por segmento y descarta los que Whisper mismo
+ *             marca como "probablemente no es voz" o con muy poca confianza.
+ *             Es lo que frena las frases inventadas sobre ruido o eco.
  */
-export async function transcribeAudio(buffer, mimeType = 'audio/webm') {
+export async function transcribeAudio(buffer, mimeType = 'audio/webm', { prompt = '', filtrar = false, voz = false } = {}) {
     const ext = mimeType.includes('mp4') ? 'mp4'
               : mimeType.includes('ogg') ? 'ogg'
               : mimeType.includes('wav') ? 'wav'
               : 'webm';
 
-    const form = new FormData();
-    form.append('file', new Blob([buffer], { type: mimeType }), `audio.${ext}`);
-    form.append('model', WHISPER_MODEL);
-    form.append('language', 'es');
-    form.append('temperature', '0');
+    const pedir = async (model) => {
+        const form = new FormData();
+        form.append('file', new Blob([buffer], { type: mimeType }), `audio.${ext}`);
+        form.append('model', model);
+        form.append('language', 'es');
+        form.append('temperature', '0');
+        if (prompt) form.append('prompt', prompt);
+        if (filtrar) form.append('response_format', 'verbose_json');
+        return fetch(`${API}/audio/transcriptions`, { method: 'POST', headers: authHeaders(), body: form });
+    };
 
-    const res = await fetch(`${API}/audio/transcriptions`, {
-        method: 'POST',
-        headers: authHeaders(),
-        body: form,
-    });
+    let res = await pedir(voz ? WHISPER_VOZ_MODEL : WHISPER_MODEL);
+    // Si el modelo de la conversación no está disponible, el de siempre.
+    if (!res.ok && voz && WHISPER_VOZ_MODEL !== WHISPER_MODEL && [400, 404].includes(res.status)) {
+        console.warn(`[groq] ${WHISPER_VOZ_MODEL} no respondió (${res.status}), uso ${WHISPER_MODEL}`);
+        res = await pedir(WHISPER_MODEL);
+    }
 
     if (!res.ok) {
         const detail = await res.text();
         throw new Error(`Groq audio ${res.status}: ${detail.slice(0, 400)}`);
     }
     const data = await res.json();
-    return String(data.text || '').trim();
+    if (!filtrar || !Array.isArray(data.segments)) return String(data.text || '').trim();
+
+    return data.segments
+        .filter(segmentoCreible)
+        .map(s => String(s.text || '').trim())
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+}
+
+/**
+ * ¿Este pedazo es voz de verdad? Los umbrales son los que usa el propio
+ * Whisper para decidir que algo es silencio, un poco más estrictos.
+ */
+export function segmentoCreible(s) {
+    const noVoz = Number(s?.no_speech_prob) || 0;
+    const confianza = Number(s?.avg_logprob);
+    const repeticion = Number(s?.compression_ratio) || 0;
+    if (noVoz > 0.6 && !(confianza > -0.4)) return false;   // casi seguro silencio o ruido
+    if (Number.isFinite(confianza) && confianza < -1.1) return false;   // adivinó
+    if (repeticion > 2.4) return false;   // repite la misma frase: alucinación típica
+    return true;
 }

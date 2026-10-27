@@ -5,6 +5,8 @@
 import { atajo, normalizarCorte, quedaColgado, quitarEstimados } from './cortador.js';
 import { normalizeEncabezado } from './ops.js';
 import { objectBefore } from './partial-json.js';
+import { vocabularioVoz, promptWhisper, esAlucinacion } from './vocabulario.js';
+import { segmentoCreible } from '../ai/providers/groq.js';
 
 let ok = 0, total = 0;
 function prueba(nombre, condicion) {
@@ -107,6 +109,31 @@ for (const texto of [
     const conCerco = objectBefore('```json\n{"pensamiento":"x","ops":[],"respuesta":"', 'respuesta');
     prueba('objectBefore: tolera el cerco de código', Array.isArray(conCerco?.ops));
 }
+
+// ---- vocabulario ----
+{
+    const v = vocabularioVoz({ items: ['Construcción de veredas', 'Demolición'], tarifario: ['Hormigón armado H17', 'demolición'], max: 10 });
+    prueba('vocabulario: lo de él va primero', v[0] === 'Construcción de veredas');
+    prueba('vocabulario: sin repetidos aunque cambie la mayúscula', v.filter(t => t.toLowerCase() === 'demolición').length === 1);
+    prueba('vocabulario: respeta el tope', v.length === 10);
+    const p = promptWhisper(vocabularioVoz({ items: ['Construcción de veredas'] }), 200);
+    prueba('prompt: incluye los términos y no se pasa del largo', p.includes('Construcción de veredas') && p.length <= 200);
+}
+
+// ---- alucinaciones de Whisper ----
+for (const t of ['Subtítulos realizados por la comunidad de Amara.org', '¡Gracias por ver!', 'Suscríbete al canal', '...', '', '¡Gracias!', 'Gracias.', 'Muchas gracias.']) {
+    prueba(`alucinación: "${t}"`, esAlucinacion(t));
+}
+for (const t of ['agregá demolición a 300 mil', 'sí', 'el item 3 a 503 pesos']) {
+    prueba(`no alucinación: "${t}"`, !esAlucinacion(t));
+}
+
+// ---- segmentos de Whisper ----
+prueba('segmento: voz clara pasa', segmentoCreible({ no_speech_prob: 0.02, avg_logprob: -0.2, compression_ratio: 1.3 }));
+prueba('segmento: silencio se descarta', !segmentoCreible({ no_speech_prob: 0.85, avg_logprob: -0.9, compression_ratio: 1.1 }));
+prueba('segmento: adivinado se descarta', !segmentoCreible({ no_speech_prob: 0.1, avg_logprob: -1.5, compression_ratio: 1.2 }));
+prueba('segmento: repetición se descarta', !segmentoCreible({ no_speech_prob: 0.1, avg_logprob: -0.3, compression_ratio: 3.1 }));
+prueba('segmento: algo de ruido pero confiado pasa', segmentoCreible({ no_speech_prob: 0.7, avg_logprob: -0.2, compression_ratio: 1.2 }));
 
 console.log(`\n${ok}/${total}`);
 process.exit(ok === total ? 0 : 1);

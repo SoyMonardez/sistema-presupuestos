@@ -2074,3 +2074,110 @@ body.voz-activa .totalbar { visibility: hidden; }
         outline-offset: 2px;
     }
 }
+
+/* ---------- Achicar a un orbe flotante ----------
+   En el celular el panel ocupa media pantalla. La manija de arriba (deslizar)
+   o el botón lo achican a un orbe que sigue mostrando la fase con su color,
+   sin tapar la lista. */
+.voz-cabeza {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 22px;
+    margin-top: -4px;
+    touch-action: none;
+    cursor: grab;
+}
+.voz-grip {
+    width: 44px; height: 5px;
+    border-radius: 999px;
+    background: var(--border);
+}
+.voz-mini-btn {
+    position: absolute;
+    right: -4px; top: 50%;
+    transform: translateY(-50%);
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+.voz-mini-btn:active { transform: translateY(-50%) scale(.94); }
+
+.voz-modo.mini .voz-panel { display: none; }
+.voz-modo.mini .voz-borde {
+    box-shadow: inset 0 0 0 2px var(--voz-a), inset 0 0 18px 2px color-mix(in srgb, var(--voz-a) 35%, transparent);
+}
+/* Achicado no tapa nada: vuelven el total y las pestañas. */
+body.voz-activa.voz-mini #pane-budget { padding-bottom: 110px; }
+body.voz-activa.voz-mini .tabbar,
+body.voz-activa.voz-mini .totalbar { visibility: visible; }
+
+.voz-flotante {
+    position: fixed;
+    z-index: 72;
+    left: 50%;
+    bottom: calc(150px + env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    width: 76px; height: 76px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    cursor: pointer;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+    filter: drop-shadow(0 6px 16px rgba(0,0,0,.28));
+    animation: vozFlotanteEntra .3s ease-out;
+}
+.voz-flotante[hidden] { display: none; }
+.voz-flotante .voz-orbe { width: 100%; height: 100%; }
+.voz-flotante.arrastrando { cursor: grabbing; animation: none; }
+.voz-flotante:focus-visible { outline: 3px solid var(--voz-a); outline-offset: 2px; }
+@keyframes vozFlotanteEntra {
+    from { opacity: 0; scale: .6; }
+    to   { opacity: 1; scale: 1; }
+}
+
+/* ---------- PC: el panel va a la esquina y no tapa la lista ---------- */
+@media (min-width: 1200px) {
+    .voz-panel {
+        left: auto;
+        right: 24px;
+        bottom: 24px;
+        transform: none;
+        width: 400px;
+        max-height: calc(100vh - 48px);
+        border-bottom: 1px solid color-mix(in srgb, var(--voz-a) 40%, var(--border));
+        border-radius: 22px;
+        animation: vozEntraPC .3s ease-out;
+    }
+    @keyframes vozEntraPC {
+        from { opacity: 0; transform: translateY(16px); }
+        to   { opacity: 1; transform: none; }
+    }
+    .voz-cabeza { cursor: default; }
+    .voz-grip { visibility: hidden; }
+    body.voz-activa #pane-budget { padding-bottom: 0; }
+    body.voz-activa .tabbar,
+    body.voz-activa .totalbar { visibility: visible; }
+
+    /* Achicado: abajo a la derecha, por encima de la barra para escribirle al asistente. */
+    .voz-flotante {
+        left: auto;
+        right: 28px;
+        bottom: 104px;
+        transform: none;
+        width: 84px; height: 84px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .voz-flotante { animation: none; }
+}

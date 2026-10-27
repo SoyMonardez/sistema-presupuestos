@@ -26,7 +26,7 @@ import { priceRefsPromptBlock } from './prices.js';
 import { unitsPromptBlock } from './units.js';
 import { loadSettings } from './settings.js';
 import { markupPromptBlock } from '../lib/markup.js';
-import { OPS_FORMATO } from './ai.js';
+import { OPS_FORMATO, vocabularioDelPresupuesto } from './ai.js';
 
 const router = Router();
 
@@ -35,11 +35,16 @@ const limite = (err) => /\b429\b|rate_limit/i.test(err.message);
 // ---------------------------------------------------------------------------
 // Token para el WebSocket de Scribe
 // ---------------------------------------------------------------------------
-router.post('/token', async (_req, res) => {
+router.post('/token', async (req, res) => {
     if (!vozConfigurada()) return res.status(503).json({ error: 'La voz de ElevenLabs no está configurada' });
     try {
         res.set('Cache-Control', 'no-store');
-        res.json({ token: await tokenTranscripcion() });
+        // Con el token va la lista de términos que Scribe tiene que preferir
+        // (los items y el tarifario de él): es lo que más baja los errores.
+        res.json({
+            token: await tokenTranscripcion(),
+            keyterms: vocabularioDelPresupuesto(Number(req.body?.budget)).slice(0, 50),
+        });
     } catch (err) {
         console.error('[voz/token]', err.message);
         res.status(502).json({ error: 'No se pudo abrir la escucha en vivo' });

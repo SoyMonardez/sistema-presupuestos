@@ -106,7 +106,25 @@ const ConversacionLogica = (() => {
         return hayParaDecir && !usuarioHabla && !ocupado && msDesdeQueHablo >= pausaMs;
     }
 
-    return { aplicarCopia, proyectar, rechazar, indicesTocados, armarResumen, tocaHablar };
+    /**
+     * ¿Lo que "escuchó" es la voz del propio asistente saliendo por el parlante?
+     * La cancelación de eco del navegador no es perfecta, y el reconocedor
+     * transcribe lo que se cuela. Si casi todas las palabras están en algo que
+     * acaba de decir, es eco y no un pedido.
+     */
+    function esEco(texto, dichos) {
+        const palabras = (t) => String(t || '').toLowerCase()
+            .normalize('NFD').replace(/[̀-ͯ]/g, '')
+            .split(/[^a-z0-9ñ]+/).filter(p => p.length >= 3);
+        const oidas = palabras(texto);
+        if (oidas.length < 2) return false;
+        const dichas = new Set(dichos.flatMap(palabras));
+        if (!dichas.size) return false;
+        const coinciden = oidas.filter(p => dichas.has(p)).length;
+        return coinciden / oidas.length >= 0.6;
+    }
+
+    return { aplicarCopia, proyectar, rechazar, indicesTocados, armarResumen, tocaHablar, esEco };
 })();
 
 const Conversacion = (typeof window === 'undefined') ? null : (() => {
@@ -143,6 +161,9 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
     let historial = [];
 
     let ultimaVozUsuario = 0;
+    // Lo que dijo el asistente hace poco, para reconocer su propio eco.
+    let dichosRecientes = [];   // [{ texto, hasta }]
+    const ECO_MS = 6000;        // cuánto después de terminar de hablar puede llegar el eco
     let estabaHablando = false;
     let reloj = null;
     let timerCierre = null;
@@ -185,6 +206,7 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
         Sonidos.entrar();
 
         const ok = await Escucha.iniciar({
+            presupuesto: Estado.actual()?.id,
             onParcial: alParcial,
             onSegmento: alSegmento,
             onHabla: (habla) => { if (habla) ultimaVozUsuario = Date.now(); },
@@ -221,8 +243,25 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
     }
 
     // ---------- Lo que escucha ----------
+    /** Habla y anota lo que dijo (ver esEco). */
+    function decir(texto) {
+        // Se estima cuánto va a tardar en decirlo (~14 caracteres por segundo)
+        // para saber hasta cuándo su eco puede seguir llegando.
+        const dura = (String(texto).length / 14) * 1000;
+        dichosRecientes.push({ texto, hasta: Date.now() + dura + ECO_MS });
+        Hablar.encolar(texto);
+    }
+
+    function esMiEco(texto) {
+        const ahora = Date.now();
+        dichosRecientes = dichosRecientes.filter(d => d.hasta > ahora);
+        return L.esEco(texto, dichosRecientes.map(d => d.texto));
+    }
+
     function alParcial(texto) {
         if (!activo) return;
+        // Su propio eco no cuenta como que él habló.
+        if (esMiEco(texto)) return;
         ultimaVozUsuario = Date.now();
         // Habló encima del asistente: se calla. Con dos o más letras, para que
         // un ruido suelto que se coló como "eh" no lo corte.
@@ -232,6 +271,7 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
 
     function alSegmento(texto) {
         if (!activo) return;
+        if (esMiEco(texto)) return;
         ultimaVozUsuario = Date.now();
         if (Hablar.estaHablando()) Hablar.callar();
         Orbe.subtitulo(texto);
@@ -286,7 +326,7 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
                 break;
             case 'salir':
                 Hablar.callar();
-                Hablar.encolar('Dale, cualquier cosa me llamás.');
+                decir('Dale, cualquier cosa me llamás.');
                 setTimeout(() => salir(), 2200);
                 break;
             default:
@@ -311,7 +351,7 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
         ultimoAcuse = '';
         const timerAcuse = setTimeout(() => {
             if (!recibioOps && activo && acuse && !Escucha.estaHablando() && !Hablar.estaHablando()) {
-                Hablar.encolar(acuse);
+                decir(acuse);
             }
         }, ACUSE_MS);
 
@@ -461,7 +501,7 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
             const texto = L.armarResumen(paraDecir, contados);
             paraDecir = [];
             contados = { altas: [], cambios: 0, bajas: 0, sinPrecio: 0 };
-            if (texto) Hablar.encolar(texto);
+            if (texto) decir(texto);
         }
 
         Orbe.cambiarFase(

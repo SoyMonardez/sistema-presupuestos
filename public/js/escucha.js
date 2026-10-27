@@ -25,6 +25,10 @@ const Escucha = (() => {
     const COLA_VOZ_MS = 700;        // cuánto sigue "hablando" después del último sonido
     const SILENCIO_SEGMENTO_MS = 900;   // respaldo: pausa que cierra un pedazo
     const PREVIO_MS = 300;          // respaldo: audio de antes de que arranque la voz
+    // Respaldo: cuántos bloques de 100 ms con voz hacen falta para mandar un
+    // pedazo. Menos que eso es un golpe, una tos o el eco del parlante, y
+    // Whisper sobre eso inventa frases.
+    const MIN_BLOQUES_CON_VOZ = 4;
 
     let stream = null;
     let ctx = null;
@@ -42,6 +46,9 @@ const Escucha = (() => {
     // Respaldo: el pedazo que se está juntando para mandar a Whisper.
     let previo = [];
     let juntando = null;
+    let bloquesConVoz = 0;
+    let presupuesto = null;         // id del presupuesto, para el vocabulario
+    let sinTerminos = false;        // Scribe rechazó los keyterms: no mandarlos más
 
     function soportada() {
         return Boolean(navigator.mediaDevices?.getUserMedia && window.AudioWorkletNode);
@@ -54,10 +61,12 @@ const Escucha = (() => {
      * @param {(habla:boolean)=>void} [c.onHabla]   arrancó o paró de hablar
      * @param {(modo:'vivo'|'respaldo')=>void} [c.onModo]
      * @param {(msg:string)=>void} [c.onError]
+     * @param {number} [c.presupuesto]  id del presupuesto abierto (vocabulario)
      */
     async function iniciar(c = {}) {
         if (activa) return;
         cb = c;
+        presupuesto = c.presupuesto || null;
         try {
             stream = await navigator.mediaDevices.getUserMedia({
                 // Sin cancelación de eco se escucharía a sí mismo hablando por
@@ -100,9 +109,9 @@ const Escucha = (() => {
 
     // ---------- En vivo: Scribe ----------
     async function conectarScribe() {
-        let token;
+        let token, keyterms = [];
         try {
-            ({ token } = await API.vozToken());
+            ({ token, keyterms = [] } = await API.vozToken(presupuesto));
         } catch {
             return false;
         }
@@ -118,7 +127,21 @@ const Escucha = (() => {
             commit_strategy: 'vad',
             vad_silence_threshold_secs: '0.8',
         });
+        // Las palabras de su obra y su tarifario: Scribe las prefiere al dudar.
+        if (!sinTerminos) for (const t of keyterms) params.append('keyterms', t);
+        const conTerminos = !sinTerminos && keyterms.length > 0;
 
+        const ok = await abrirScribe(params);
+        // Si no arrancó con los términos, se prueba una vez sin ellos: mejor
+        // escuchar sin vocabulario que caer al respaldo por un parámetro.
+        if (!ok && conTerminos && activa) {
+            sinTerminos = true;
+            return conectarScribe();
+        }
+        return ok;
+    }
+
+    function abrirScribe(params) {
         return new Promise((resolver) => {
             let arranco = false;
             const socket = new WebSocket(`${URL_SCRIBE}?${params}`);
@@ -196,23 +219,26 @@ const Escucha = (() => {
         if (!juntando) {
             previo.push(bloque);
             while (previo.length > PREVIO_MS / 100) previo.shift();
-            if (hayVoz) { juntando = previo.slice(); previo = []; }
+            if (hayVoz) { juntando = previo.slice(); previo = []; bloquesConVoz = 1; }
             return;
         }
         juntando.push(bloque);
+        if (hayVoz) bloquesConVoz++;
         const silencio = ahora - ultimaVoz;
         const largo = juntando.length / 10;   // segundos
         if (silencio >= SILENCIO_SEGMENTO_MS || largo >= 30) {
             const pedazo = juntando;
+            const conVoz = bloquesConVoz;
             juntando = null;
-            // Menos de medio segundo de audio es un ruido, no un pedido.
-            if (pedazo.length >= 5) transcribirPedazo(pedazo);
+            bloquesConVoz = 0;
+            // Menos de medio segundo de audio, o casi todo silencio, es un ruido.
+            if (pedazo.length >= 5 && conVoz >= MIN_BLOQUES_CON_VOZ) transcribirPedazo(pedazo);
         }
     }
 
     async function transcribirPedazo(bloques) {
         try {
-            const { text } = await API.aiTranscribe(aWav(bloques));
+            const { text } = await API.aiTranscribe(aWav(bloques), { voz: true, budget: presupuesto });
             if (activa && text?.trim()) cb.onSegmento?.(text.trim());
         } catch {
             // "No se entendió el audio": normal con ruidos sueltos. Se ignora.
@@ -263,6 +289,7 @@ const Escucha = (() => {
         stream = null;
         previo = [];
         juntando = null;
+        bloquesConVoz = 0;
         nivelActual = 0;
         hablaba = false;
     }

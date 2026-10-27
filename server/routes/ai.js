@@ -7,7 +7,8 @@ import { normalizeOps } from '../lib/ops.js';
 import { canonicalLabel } from '../lib/units.js';
 import { conReintentoDeTamaño } from '../lib/images.js';
 import db, { loadUnitCatalog } from '../db.js';
-import { priceRefsPromptBlock } from './prices.js';
+import { priceRefsPromptBlock, listarPreciosRef } from './prices.js';
+import { vocabularioVoz, promptWhisper, esAlucinacion } from '../lib/vocabulario.js';
 import { unitsPromptBlock } from './units.js';
 import { loadSettings } from './settings.js';
 import { markupPromptBlock } from '../lib/markup.js';
@@ -58,7 +59,16 @@ router.post('/transcribe', rawAudio, async (req, res) => {
         return res.status(400).json({ error: 'No llegó audio' });
     }
     try {
-        const text = await transcribeAudio(req.body, req.headers['content-type'] || 'audio/webm');
+        // `voz=1`: un pedazo de la conversación por voz. Va con el vocabulario
+        // de la obra y descartando lo que no es voz (ver lib/vocabulario.js).
+        const voz = req.query.voz === '1';
+        const opciones = voz ? {
+            voz: true,
+            filtrar: true,
+            prompt: promptWhisper(vocabularioDelPresupuesto(Number(req.query.budget))),
+        } : {};
+        let text = await transcribeAudio(req.body, req.headers['content-type'] || 'audio/webm', opciones);
+        if (voz && esAlucinacion(text)) text = '';
         if (!text) return res.status(422).json({ error: 'No se entendió el audio. Probá de nuevo más cerca del micrófono.' });
         res.json({ text });
     } catch (err) {
@@ -66,6 +76,16 @@ router.post('/transcribe', rawAudio, async (req, res) => {
         res.status(502).json({ error: 'No se pudo transcribir el audio. Probá de nuevo.' });
     }
 });
+
+/** Términos para el reconocedor: los items de ese presupuesto y el tarifario. */
+export function vocabularioDelPresupuesto(budgetId) {
+    let items = [];
+    if (Number.isInteger(budgetId) && budgetId > 0) {
+        items = db.prepare('SELECT name FROM items WHERE budget_id = ? ORDER BY position, id').all(budgetId).map(r => r.name);
+    }
+    const tarifario = listarPreciosRef().map(p => p.name);
+    return vocabularioVoz({ items, tarifario });
+}
 
 // Audio de respuesta: la clave de ElevenLabs nunca sale del servidor.
 router.post('/speak', async (req, res) => {
