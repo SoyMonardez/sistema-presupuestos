@@ -1827,7 +1827,8 @@ body.modal-open { overflow: hidden; }
 /* Los títulos de columna de los items solo existen en escritorio. */
 .items-head { display: none; }
 
-/* ============================================================   ESCRITORIO (≥ 1200px)
+/* ===================================================================
+   ESCRITORIO (≥ 1200px)
 
    Todo el rediseño vive acá adentro, así que el celular y la tablet no
    cambian en nada. La idea: aprovechar el ancho en vez de estirar la columna
@@ -2074,7 +2075,8 @@ body.modal-open { overflow: hidden; }
     .chat-scroll { padding: 16px 20px 4px; }
     .chat-input { font-size: 15px; }   /* en un panel angosto el placeholder no entra a 16px */
     .chat-msg { max-width: 92%; }
-=======
+}
+
 /* ===================================================================
    Modo conversación por voz
    ===================================================================
