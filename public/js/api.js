@@ -44,8 +44,11 @@ const API = {
     convertUnits(body) { return this.request('/api/units/convert', { method: 'POST', body: JSON.stringify(body) }); },
     aiParse(text)      { return this.request('/api/ai/parse', { method: 'POST', body: JSON.stringify({ text }) }); },
     aiCommand(text, items) { return this.request('/api/ai/command', { method: 'POST', body: JSON.stringify({ text, items }) }); },
-    async aiTranscribe(blob) {
-        const res = await fetch('/api/ai/transcribe', {
+    // `voz`: pedazo de la conversación por voz (con vocabulario del presupuesto
+    // `budget` y filtro de lo que no es voz, ver server/lib/vocabulario.js).
+    async aiTranscribe(blob, { voz = false, budget = null } = {}) {
+        const query = voz ? `?voz=1${budget ? `&budget=${encodeURIComponent(budget)}` : ''}` : '';
+        const res = await fetch('/api/ai/transcribe' + query, {
             method: 'POST',
             headers: {
                 'Content-Type': blob.type || 'audio/webm',
@@ -156,7 +159,7 @@ const API = {
     },
 
     // ---- Conversación por voz ----
-    vozToken()          { return this.request('/api/voz/token', { method: 'POST' }); },
+    vozToken(budget)    { return this.request('/api/voz/token', { method: 'POST', body: JSON.stringify({ budget }) }); },
     vozCortar(body)     { return this.request('/api/voz/cortar', { method: 'POST', body: JSON.stringify(body) }); },
     /**
      * Un turno de la conversación por voz. Mismo SSE leído a mano que

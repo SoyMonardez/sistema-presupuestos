@@ -26,12 +26,22 @@ const Orbe = (() => {
     };
     const MAX_TARJETAS = 4;
 
-    let raiz, canvas, g2d, faseEl, subEl, tarjetasEl, deshacerBtn, autoInput;
+    let raiz, canvas, g2d, faseEl, subEl, tarjetasEl, deshacerBtn, autoInput, flotante, centro;
     let fase = 'escuchando';
     let colores = ['#38bdf8', '#6366f1'];
     let cuadro = null;
     let medirNivel = () => 0;
     let suavizado = 0;
+    let mini = false;
+
+    // El panel ocupa media pantalla en el celular. Se lo puede achicar a un orbe
+    // flotante que sigue mostrando en qué anda (color y movimiento) sin tapar
+    // la lista. Se recuerda si lo dejó así y dónde lo puso.
+    const CLAVE_MINI = 'presu_voz_mini';
+    const clavePosicion = () => `presu_voz_flotante_${esPC() ? 'pc' : 'cel'}`;
+    const esPC = () => window.matchMedia('(min-width: 1200px)').matches;
+    const leer = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+    const guardar = (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} };
 
     function init({ onSalir, onDeshacer, onAuto, nivel }) {
         raiz = $('#voz-modo');
@@ -42,7 +52,13 @@ const Orbe = (() => {
         tarjetasEl = $('#voz-tarjetas');
         deshacerBtn = $('#voz-deshacer');
         autoInput = $('#voz-auto');
+        flotante = $('#voz-flotante');
+        centro = canvas.parentElement;
         if (nivel) medirNivel = nivel;
+
+        $('#voz-minimizar').addEventListener('click', () => minimizar());
+        prepararDeslizar($('#voz-cabeza'));
+        prepararArrastre(flotante);
 
         $('#voz-salir').addEventListener('click', () => onSalir?.());
         deshacerBtn.addEventListener('click', () => onDeshacer?.());
@@ -56,15 +72,97 @@ const Orbe = (() => {
         tarjetasEl.innerHTML = '';
         subtitulo('');
         cambiarFase('escuchando');
-        ajustarCanvas();
+        ponerMini(leer(CLAVE_MINI) === '1');
         if (!cuadro) cuadro = requestAnimationFrame(dibujar);
     }
 
     function cerrar() {
         raiz.hidden = true;
-        document.body.classList.remove('voz-activa');
+        document.body.classList.remove('voz-activa', 'voz-mini');
         cancelAnimationFrame(cuadro);
         cuadro = null;
+    }
+
+    // ---------- Orbe flotante ----------
+    function minimizar() { ponerMini(true); guardar(CLAVE_MINI, '1'); }
+    function expandir()  { ponerMini(false); guardar(CLAVE_MINI, null); }
+
+    function ponerMini(si) {
+        mini = si;
+        raiz.classList.toggle('mini', si);
+        document.body.classList.toggle('voz-mini', si);
+        flotante.hidden = !si;
+        // Un solo canvas: se muda entre el panel y el botón flotante.
+        (si ? flotante : centro).prepend(canvas);
+        if (si) ubicarFlotante();
+        ajustarCanvas();
+    }
+
+    function ubicarFlotante() {
+        // Se borra todo lo que dejó un arrastre anterior: si quedara `right:auto`
+        // de la posición del celular, en la PC la esquina del CSS no se aplica.
+        for (const p of ['left', 'top', 'right', 'bottom', 'transform']) flotante.style[p] = '';
+        const guardada = leer(clavePosicion());
+        if (!guardada) return;   // la del CSS: abajo al medio, o abajo a la derecha en la PC
+        const [x, y] = guardada.split(',').map(Number);
+        if (Number.isFinite(x) && Number.isFinite(y)) moverFlotante(x, y);
+    }
+
+    function moverFlotante(x, y) {
+        const lado = flotante.offsetWidth || 76;
+        const maxX = window.innerWidth - lado - 8;
+        const maxY = window.innerHeight - lado - 8;
+        flotante.style.left = `${Math.max(8, Math.min(maxX, x))}px`;
+        flotante.style.top = `${Math.max(8, Math.min(maxY, y))}px`;
+        flotante.style.right = flotante.style.bottom = 'auto';
+        flotante.style.transform = 'none';
+    }
+
+    /**
+     * Arrastrar el orbe lo mueve; tocarlo sin moverlo abre el panel. La
+     * diferencia es si se corrió más de unos pocos píxeles.
+     */
+    function prepararArrastre(el) {
+        let inicio = null;
+        el.addEventListener('pointerdown', (e) => {
+            const r = el.getBoundingClientRect();
+            inicio = { x: e.clientX, y: e.clientY, dx: e.clientX - r.left, dy: e.clientY - r.top, movio: false };
+            el.setPointerCapture(e.pointerId);
+        });
+        el.addEventListener('pointermove', (e) => {
+            if (!inicio) return;
+            if (!inicio.movio && Math.hypot(e.clientX - inicio.x, e.clientY - inicio.y) < 8) return;
+            inicio.movio = true;
+            el.classList.add('arrastrando');
+            moverFlotante(e.clientX - inicio.dx, e.clientY - inicio.dy);
+        });
+        const soltar = () => {
+            if (!inicio) return;
+            const movio = inicio.movio;
+            inicio = null;
+            el.classList.remove('arrastrando');
+            if (movio) guardar(clavePosicion(), `${parseInt(el.style.left)},${parseInt(el.style.top)}`);
+            else expandir();
+        };
+        el.addEventListener('pointerup', soltar);
+        el.addEventListener('pointercancel', () => { inicio = null; el.classList.remove('arrastrando'); });
+    }
+
+    /** En el celular: deslizar la manija del panel (para arriba o abajo) lo achica. */
+    function prepararDeslizar(el) {
+        let y0 = null;
+        el.addEventListener('pointerdown', (e) => {
+            if (e.target.closest('button')) return;
+            y0 = e.clientY;
+            el.setPointerCapture(e.pointerId);
+        });
+        el.addEventListener('pointermove', (e) => {
+            if (y0 === null) return;
+            if (Math.abs(e.clientY - y0) > 40) { y0 = null; minimizar(); }
+        });
+        const fin = () => { y0 = null; };
+        el.addEventListener('pointerup', fin);
+        el.addEventListener('pointercancel', fin);
     }
 
     function cambiarFase(nueva) {
@@ -208,7 +306,11 @@ const Orbe = (() => {
         g2d.fill();
     }
 
-    window.addEventListener('resize', () => { if (cuadro) ajustarCanvas(); });
+    window.addEventListener('resize', () => {
+        if (!cuadro) return;
+        if (mini) ubicarFlotante();   // que no quede afuera de la pantalla al girar el celular
+        ajustarCanvas();
+    });
 
-    return { init, abrir, cerrar, cambiarFase, subtitulo, permitirDeshacer, nuevaTarjeta };
+    return { init, abrir, cerrar, cambiarFase, subtitulo, permitirDeshacer, nuevaTarjeta, minimizar, expandir, estaMini: () => mini };
 })();

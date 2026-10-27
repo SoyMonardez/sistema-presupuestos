@@ -101,5 +101,13 @@ prueba('hablar: si recién paró, espera la pausa', !L.tocaHablar({ ...base, msD
 prueba('hablar: si todavía está pensando lo siguiente, espera', !L.tocaHablar({ ...base, ocupado: true }));
 prueba('hablar: sin nada para decir, no', !L.tocaHablar({ ...base, hayParaDecir: false }));
 
+// ---- esEco ----
+const dicho = ['Listo, agregué la demolición. ¿Con qué seguimos?'];
+prueba('eco: lo que acaba de decir el asistente es eco', L.esEco('agregué la demolición con qué seguimos', dicho));
+prueba('eco: un pedido nuevo no es eco', !L.esEco('agregá contrapiso 20 metros a 15 lucas', dicho));
+prueba('eco: una palabra suelta no alcanza para decidir', !L.esEco('listo', dicho));
+prueba('eco: sin nada dicho, nunca es eco', !L.esEco('agregué la demolición', []));
+prueba('eco: ignora tildes y mayúsculas', L.esEco('AGREGUE LA DEMOLICION', dicho));
+
 console.log(`\n${ok}/${total}`);
 process.exit(ok === total ? 0 : 1);
