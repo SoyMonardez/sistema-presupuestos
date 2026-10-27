@@ -169,6 +169,38 @@ export function normalizeOps(rawOps, items, catalog = DEFAULT_UNITS, maxOps = 20
     return { ops: ops.slice(0, maxOps), warnings };
 }
 
+// Los campos del encabezado que la IA puede llenar. Es la misma lista que lee el
+// formulario del editor (leerCampos en public/js/app.js) menos lo que es de
+// formato (notas, orientación del PDF), que no se dicta.
+const ENCABEZADO_TEXTO = {
+    name: 200, client: 200, location: 200, client_role: 120,
+    client_address: 160, client_cp: 20, client_phone: 40, client_email: 120,
+};
+
+/**
+ * Valida lo que la IA quiere poner en el encabezado. Lo que no está en la lista
+ * se descarta; lo que vino vacío también, porque "no lo mencionó" no tiene que
+ * borrar lo que ya estaba escrito.
+ */
+export function normalizeEncabezado(raw) {
+    if (!raw || typeof raw !== 'object') return {};
+    const out = {};
+    for (const [campo, max] of Object.entries(ENCABEZADO_TEXTO)) {
+        if (raw[campo] === undefined || raw[campo] === null) continue;
+        const valor = String(raw[campo]).replace(/\s+/g, ' ').trim().slice(0, max);
+        if (valor) out[campo] = valor;
+    }
+    const dias = Number(raw.validity_days);
+    if (raw.validity_days !== undefined && Number.isFinite(dias) && dias > 0) {
+        out.validity_days = Math.min(365, Math.round(dias));
+    }
+    const anticipo = Number(raw.advance_pct);
+    if (raw.advance_pct !== undefined && Number.isFinite(anticipo) && anticipo >= 0) {
+        out.advance_pct = Math.min(100, Math.round(anticipo));
+    }
+    return out;
+}
+
 /**
  * Aplica las operaciones ya validadas sobre una copia de los items.
  * El orden importa y es el mismo que usa el frontend: primero editar (los índices

@@ -136,6 +136,10 @@ const Hablar = (() => {
         // Marcas de markdown que el modelo mete a veces: se leerían "asterisco".
         t = t.replace(/\*\*(.+?)\*\*/g, '$1').replace(/[*_`#]/g, '');
 
+        // Algunos motores de voz se cortan con signos de apertura/cierre o
+        // comillas tipográficas. Se conservan las pausas, pero no los símbolos.
+        t = t.replace(/[¿¡]/g, '').replace(/[?!]+/g, '.').replace(/[“”"'()[\]{}]/g, ' ');
+
         // Plata: "$238.525" o "$ 1.500.000,50" → en palabras + "pesos".
         t = t.replace(/\$\s?(\d[\d.,]*)/g, (m, num) => {
             const n = aNumero(num);
@@ -212,6 +216,36 @@ const Hablar = (() => {
     let pausado = false;
     let idActual = null;        // qué mensaje se está leyendo
     let pausaNativa = false;    // ¿el navegador pausó de verdad?
+    // Cada lectura tiene su propia generación. Los eventos atrasados de una
+    // locución cancelada no pueden tocar la lectura que acaba de empezar.
+    let generacion = 0;
+    let audioRemoto = null;
+    let urlAudioRemoto = null;
+    let pedidoAudioRemoto = null;
+    // Si el servidor dijo que la voz paga no está configurada, no tiene sentido
+    // preguntarle de nuevo en cada frase: cada intento son unos cientos de ms de
+    // silencio antes de caer a la voz del aparato.
+    let remotaApagada = false;
+
+    function vozRemotaDisponible() {
+        return !remotaApagada && typeof API !== 'undefined' && typeof API.aiSpeak === 'function';
+    }
+    function anotarFalloRemoto(err) {
+        if (/no est[aá] configurada/i.test(err?.message || '')) remotaApagada = true;
+    }
+
+    function liberarAudioRemoto() {
+        pedidoAudioRemoto?.abort();
+        pedidoAudioRemoto = null;
+        if (audioRemoto) {
+            audioRemoto.onended = null;
+            audioRemoto.onerror = null;
+            audioRemoto.pause();
+            audioRemoto = null;
+        }
+        if (urlAudioRemoto) URL.revokeObjectURL(urlAudioRemoto);
+        urlAudioRemoto = null;
+    }
 
     /**
      * Lee el texto. Corta lo que estuviera diciendo antes.
@@ -219,20 +253,55 @@ const Hablar = (() => {
      * botón marcar como "sonando".
      */
     function decir(texto, id = null) {
-        if (!soportado) return;
         callar();
-
         const limpio = paraLeer(texto);
         if (!limpio) return;
-        if (!vozElegida) elegirVoz();
+        const gen = ++generacion;
 
+        // La voz paga devuelve un MP3 real: pausa y continúa siempre igual en
+        // todos los navegadores. Si no está disponible, queda la voz nativa.
+        if (vozRemotaDisponible()) {
+            decirConElevenLabs(limpio, id, gen);
+            return;
+        }
+        if (!soportado) return;
+        if (!vozElegida) elegirVoz();
         idActual = id;
         pendientes = enFrases(limpio);
-        arrancar();
+        arrancar(gen);
+    }
+
+    async function decirConElevenLabs(texto, id, gen) {
+        idActual = id;
+        hablando = true;
+        pausado = false;
+        avisar();
+        const controlador = new AbortController();
+        pedidoAudioRemoto = controlador;
+        try {
+            const blob = await API.aiSpeak(texto, controlador.signal);
+            if (gen !== generacion) return;
+            pedidoAudioRemoto = null;
+            urlAudioRemoto = URL.createObjectURL(blob);
+            const audio = new Audio(urlAudioRemoto);
+            audioRemoto = audio;
+            audio.onended = () => { if (gen === generacion) terminar(); };
+            audio.onerror = () => { if (gen === generacion) terminar(); };
+            await audio.play();
+        } catch (err) {
+            if (gen !== generacion) return;
+            pedidoAudioRemoto = null;
+            anotarFalloRemoto(err);
+            // Si falta configuración, no hay red o el navegador bloquea audio,
+            // la app sigue pudiendo leer con la voz gratuita del dispositivo.
+            if (!soportado) { terminar(); return; }
+            pendientes = enFrases(texto);
+            arrancar(gen);
+        }
     }
 
     /** Mete en la cola del navegador lo que quede por decir. */
-    function arrancar() {
+    function arrancar(gen = generacion) {
         if (!pendientes.length) { terminar(); return; }
 
         hablando = true;
@@ -252,23 +321,135 @@ const Hablar = (() => {
             u.rate = 0.95;
             u.pitch = 1;
             u.onend = () => {
+                // Chrome puede avisar tarde el final de algo ya cancelado.
+                if (gen !== generacion) return;
                 // Si se cortó por una pausa, no se descuenta: esa frase se
                 // vuelve a decir entera al reanudar.
                 if (pausado) return;
                 pendientes.shift();
                 if (i === frases.length - 1) terminar();
             };
-            u.onerror = () => { if (!pausado) terminar(); };
+            u.onerror = () => {
+                if (gen === generacion && !pausado) terminar();
+            };
             speechSynthesis.speak(u);
         });
 
         arrancarMantenerVivo();
     }
 
+    // ---------- Cola de la conversación por voz ----------
+    // decir() corta lo anterior y lee un mensaje entero. La conversación en vivo
+    // necesita otra cosa: ir sumando frases a medida que el modelo las escribe y
+    // que suenen una detrás de otra, sin baches. Para eso cada frase se le pide
+    // al servidor apenas llega (precarga) y se reproduce cuando le toca.
+    //
+    // callar() la vacía igual que corta decir(): es lo que se usa cuando él
+    // empieza a hablar encima.
+    let cola = [];              // [{ frase, audio: Promise<Blob|null>, ctrl }]
+    let reproduciendoCola = false;
+    let medidor = null;         // AnalyserNode de la frase que está sonando
+
+    function encolar(texto, { rapida = true } = {}) {
+        const limpio = paraLeer(texto);
+        if (!limpio) return;
+        for (const frase of enFrases(limpio)) {
+            const ctrl = new AbortController();
+            const audio = vozRemotaDisponible()
+                ? API.aiSpeak(frase, ctrl.signal, { rapida }).catch(err => { anotarFalloRemoto(err); return null; })
+                : Promise.resolve(null);
+            cola.push({ frase, audio, ctrl });
+        }
+        if (!reproduciendoCola) siguienteDeCola();
+    }
+
+    async function siguienteDeCola() {
+        const item = cola.shift();
+        if (!item) {
+            reproduciendoCola = false;
+            medidor = null;
+            terminar();
+            return;
+        }
+        reproduciendoCola = true;
+        hablando = true;
+        pausado = false;
+        avisar();
+
+        const gen = generacion;
+        const blob = await item.audio;
+        if (gen !== generacion) return;
+
+        const seguir = () => {
+            if (gen !== generacion) return;
+            liberarAudioRemoto();
+            medidor = null;
+            siguienteDeCola();
+        };
+
+        if (blob) {
+            urlAudioRemoto = URL.createObjectURL(blob);
+            const audio = new Audio(urlAudioRemoto);
+            audioRemoto = audio;
+            medidor = conectarMedidor(audio);
+            audio.onended = seguir;
+            audio.onerror = seguir;
+            audio.play().catch(seguir);
+            return;
+        }
+        if (soportado) {
+            if (!vozElegida) elegirVoz();
+            const u = new SpeechSynthesisUtterance(item.frase);
+            if (vozElegida) { u.voice = vozElegida; u.lang = vozElegida.lang; }
+            else u.lang = 'es-AR';
+            u.rate = 1;
+            u.onend = seguir;
+            u.onerror = seguir;
+            speechSynthesis.speak(u);
+            return;
+        }
+        seguir();
+    }
+
+    // El orbe de la conversación se mueve con el volumen de la voz. Solo se
+    // puede medir el MP3 (pasa por Web Audio); la voz del aparato no se deja.
+    function conectarMedidor(audio) {
+        const ctx = typeof Sonidos !== 'undefined' ? Sonidos.contexto() : null;
+        if (!ctx) return null;
+        try {
+            const fuente = ctx.createMediaElementSource(audio);
+            const analizador = ctx.createAnalyser();
+            analizador.fftSize = 512;
+            fuente.connect(analizador);
+            analizador.connect(ctx.destination);
+            return analizador;
+        } catch {
+            return null;
+        }
+    }
+
+    /** Volumen de lo que está diciendo, de 0 a 1 (null si no se puede medir). */
+    function nivel() {
+        if (!medidor) return null;
+        const datos = new Uint8Array(medidor.fftSize);
+        medidor.getByteTimeDomainData(datos);
+        let suma = 0;
+        for (const v of datos) { const x = (v - 128) / 128; suma += x * x; }
+        return Math.min(1, Math.sqrt(suma / datos.length) * 4);
+    }
+
+    function vaciarCola() {
+        for (const item of cola) item.ctrl.abort();
+        cola = [];
+        reproduciendoCola = false;
+        medidor = null;
+    }
+
     function terminar() {
         hablando = false;
         pausado = false;
         pendientes = [];
+        liberarAudioRemoto();
         idActual = null;
         pararMantenerVivo();
         avisar();
@@ -276,8 +457,12 @@ const Hablar = (() => {
 
     /** Corta del todo. Lo que faltaba se pierde. */
     function callar() {
-        if (!soportado) return;
-        speechSynthesis.cancel();
+        // Invalidar antes de cancelar: algunos navegadores disparan onend como
+        // consecuencia de cancel(), aun después de iniciar otra lectura.
+        generacion++;
+        vaciarCola();
+        liberarAudioRemoto();
+        if (soportado) speechSynthesis.cancel();
         pararMantenerVivo();
         if (hablando || pausado) terminar();
         else { pendientes = []; idActual = null; }
@@ -288,20 +473,39 @@ const Hablar = (() => {
      * seguido no lo hace— se corta y se recuerda por dónde iba.
      */
     function pausar() {
-        if (!soportado || !hablando || pausado) return;
+        if (!hablando || pausado) return;
+        if (audioRemoto) {
+            pausado = true;
+            audioRemoto.pause();
+            avisar();
+            return;
+        }
+        if (!soportado) return;
         pausado = true;
         pararMantenerVivo();
 
         speechSynthesis.pause();
         pausaNativa = speechSynthesis.paused === true;
-        if (!pausaNativa) speechSynthesis.cancel();   // se sigue desde `pendientes`
+        if (!pausaNativa) {
+            // Al cancelar para pausar, invalidar también esas locuciones.
+            // Sus onend pueden llegar después de que el usuario reanude.
+            generacion++;
+            speechSynthesis.cancel();   // se sigue desde `pendientes`
+        }
 
         avisar();
     }
 
     /** Sigue desde donde había quedado. */
     function reanudar() {
-        if (!soportado || !pausado) return;
+        if (!pausado) return;
+        if (audioRemoto) {
+            pausado = false;
+            audioRemoto.play().catch(() => terminar());
+            avisar();
+            return;
+        }
+        if (!soportado) return;
         pausado = false;
 
         if (pausaNativa) {
@@ -310,7 +514,7 @@ const Hablar = (() => {
             arrancarMantenerVivo();
             avisar();
         } else {
-            arrancar();   // vuelve a encolar lo que faltaba
+            arrancar(generacion);   // vuelve a encolar lo que faltaba
         }
     }
 
@@ -365,6 +569,7 @@ const Hablar = (() => {
         soportado, disponible, vozActual, paraLeer, destrabar,
         decir, callar, pausar, reanudar, alternarPausa,
         estaHablando, estaPausado, leyendoId, alHablar,
+        encolar, nivel,
     };
 })();
 

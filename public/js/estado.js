@@ -27,16 +27,18 @@ const Estado = (() => {
     // Los enganches con el resto de la app. Vacíos por defecto para que este
     // módulo se pueda cargar (y probar) sin nada más alrededor.
     let leerCampos = () => ({});
+    let escribirCampos = () => {};
     let repintar = () => {};
 
     let saveTimer = null;
 
     /**
-     * Le enseña al estado dos cosas que solo el editor sabe: cómo leer su
-     * formulario y cómo repintar la lista de items.
+     * Le enseña al estado lo que solo el editor sabe: cómo leer y escribir su
+     * formulario, y cómo repintar la lista de items.
      */
-    function conectar({ campos, onRender }) {
+    function conectar({ campos, escribir, onRender }) {
         if (campos) leerCampos = campos;
+        if (escribir) escribirCampos = escribir;
         if (onRender) repintar = onRender;
     }
 
@@ -160,11 +162,50 @@ const Estado = (() => {
         scheduleSave();
     }
 
+    // ---------- Encabezado y deshacer (conversación por voz) ----------
+    /**
+     * Pone datos en la cabecera (título, cliente…). Se escribe en el formulario
+     * porque es de ahí que lee el guardado: así queda una sola fuente de verdad.
+     */
+    function aplicarEncabezado(campos) {
+        if (!presupuesto || !campos || !Object.keys(campos).length) return;
+        escribirCampos(campos);
+        scheduleSave();
+    }
+
+    // Fotos de antes de cada tanda de cambios. Con el modo Auto los cambios se
+    // aplican sin preguntar, así que "deshacé eso" tiene que poder volver atrás
+    // de verdad, no solo esconder una tarjeta.
+    const fotos = [];
+    const MAX_FOTOS = 30;
+
+    function instantanea() {
+        if (!presupuesto) return;
+        fotos.push({ id: presupuesto.id, items: items.map(i => ({ ...i })), campos: leerCampos() });
+        if (fotos.length > MAX_FOTOS) fotos.shift();
+    }
+
+    /** Vuelve a la última foto. Devuelve false si no había nada que deshacer. */
+    function deshacer() {
+        // Una foto de otro presupuesto no se puede restaurar sobre este.
+        while (fotos.length && fotos[fotos.length - 1].id !== presupuesto?.id) fotos.pop();
+        const foto = fotos.pop();
+        if (!foto) return false;
+        reemplazarItems(foto.items);
+        escribirCampos(foto.campos);
+        render();
+        scheduleSave();
+        return true;
+    }
+
+    const puedeDeshacer = () => fotos.some(f => f.id === presupuesto?.id);
+
     return {
         conectar,
         actual, lista, hayPresupuesto,
         abrir, cerrar, reemplazarItems, agregarItem, sacarItem, set,
         render, scheduleSave, flushSave,
         aplicarOps, aplicarYGuardar,
+        aplicarEncabezado, instantanea, deshacer, puedeDeshacer,
     };
 })();

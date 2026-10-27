@@ -109,6 +109,7 @@
             id: data.id, name: data.name, client: data.client, notes: data.notes,
             location: data.location || '', validity_days: data.validity_days ?? 10, advance_pct: data.advance_pct ?? 25,
             format: data.format === 'municipal' ? 'municipal' : 'original',
+            pdf_orientation: data.pdf_orientation === 'portrait' ? 'portrait' : 'landscape',
             client_role: data.client_role || '', client_address: data.client_address || '',
             client_cp: data.client_cp || '', client_phone: data.client_phone || '', client_email: data.client_email || '',
         }, data.items.map(i => ({
@@ -127,8 +128,8 @@
         $('#budget-client-phone').value = b.client_phone;
         $('#budget-client-email').value = b.client_email;
         applyFormatUI(b.format);
+        applyOrientationUI(b.pdf_orientation);
         Borrador.ocultar();
-        Entradas.ocultarPanel();
         Estado.render();
         show('editor');
         tabs?.go(0, { animate: false });
@@ -137,6 +138,9 @@
         // El editor es una capa: el gesto de volver del celular lleva a la lista,
         // no saca de la app.
         Nav.pushLayer('editor', async () => {
+            // Si estaba conversando, se corta: el micrófono no puede quedar
+            // abierto escuchando para un presupuesto que ya no está en pantalla.
+            Conversacion.salir();
             await Estado.flushSave();
             await openList();
         });
@@ -165,12 +169,56 @@
             advance_pct: Number($('#budget-advance').value) || 0,
             validity_days: Number($('#budget-validity').value) || 0,
             format: b.format || 'original',
+            pdf_orientation: b.pdf_orientation === 'portrait' ? 'portrait' : 'landscape',
             client_role: $('#budget-client-role').value,
             client_address: $('#budget-client-address').value,
             client_cp: $('#budget-client-cp').value,
             client_phone: $('#budget-client-phone').value,
             client_email: $('#budget-client-email').value,
         };
+    }
+
+    // Lo inverso: escribir en el formulario. Lo usan la conversación por voz
+    // ("poné de título Casa Pérez") y deshacer. Los campos que no son del
+    // formulario (notas, formato) se guardan en el estado tal cual.
+    const CAMPO_A_INPUT = {
+        name: '#budget-name', client: '#budget-client', location: '#budget-location',
+        advance_pct: '#budget-advance', validity_days: '#budget-validity',
+        client_role: '#budget-client-role', client_address: '#budget-client-address',
+        client_cp: '#budget-client-cp', client_phone: '#budget-client-phone', client_email: '#budget-client-email',
+    };
+    function escribirCampos(campos) {
+        for (const [campo, valor] of Object.entries(campos || {})) {
+            const sel = CAMPO_A_INPUT[campo];
+            if (sel) $(sel).value = valor ?? '';
+            else if (campo === 'notes') Estado.set(campo, valor);
+        }
+    }
+
+    // El título se escribe solo, letra por letra, y los demás campos destellan:
+    // él está mirando la lista, no el formulario, y tiene que ver que cambió.
+    function animarEncabezado(campos) {
+        for (const campo of Object.keys(campos)) {
+            const el = $(CAMPO_A_INPUT[campo] || '#__nada');
+            if (!el) continue;
+            el.classList.remove('voz-campo');
+            void el.offsetWidth;
+            el.classList.add('voz-campo');
+            setTimeout(() => el.classList.remove('voz-campo'), 1400);
+        }
+        if (campos.name) {
+            const el = $('#budget-name');
+            el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            const final = String(campos.name);
+            let i = 0;
+            const paso = () => {
+                i = Math.min(final.length, i + Math.max(1, Math.ceil(final.length / 18)));
+                el.value = final.slice(0, i);
+                if (i < final.length) setTimeout(paso, 30);
+            };
+            el.value = '';
+            paso();
+        }
     }
 
     [
@@ -189,6 +237,7 @@
         document.querySelectorAll('.orig-only').forEach(el => { el.hidden = muni; });
         // Campos exclusivos del formato municipio
         $('#municipal-fields').hidden = !muni;
+        $('#municipal-orientation').hidden = !muni;
         const hint = $('#format-hint');
         if (hint) hint.textContent = muni
             ? 'Formato formal blanco y negro, para presentar al municipio.'
@@ -200,6 +249,21 @@
             if (!Estado.hayPresupuesto()) return;
             Estado.set('format', btn.dataset.format);
             applyFormatUI(btn.dataset.format);
+            Estado.scheduleSave();
+        });
+    });
+
+    function applyOrientationUI(orientation) {
+        document.querySelectorAll('.orientation-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.orientation === orientation);
+        });
+    }
+
+    document.querySelectorAll('.orientation-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (!Estado.hayPresupuesto()) return;
+            Estado.set('pdf_orientation', btn.dataset.orientation);
+            applyOrientationUI(btn.dataset.orientation);
             Estado.scheduleSave();
         });
     });
@@ -292,7 +356,7 @@
 
         // Estado sabe guardar, pero no sabe de esta pantalla: acá se le enseña a
         // leer el formulario. Quién repinta la lista de items lo registra items.js.
-        Estado.conectar({ campos: leerCampos });
+        Estado.conectar({ campos: leerCampos, escribir: escribirCampos });
 
         Precios.init({ mostrar: show, alSalir: openList });
 
@@ -306,6 +370,16 @@
                 toast('Cambios aplicados');
             },
             toast,
+        });
+
+        // La conversación por voz tampoco toca el estado por su cuenta: aplica
+        // a través de Estado e Items, y del encabezado solo sabe lo que le dan.
+        Conversacion.init({
+            leerEncabezado: () => {
+                const { name, client, location, client_role, client_address, client_cp, client_phone, client_email, validity_days, advance_pct } = leerCampos();
+                return { name, client, location, client_role, client_address, client_cp, client_phone, client_email, validity_days, advance_pct };
+            },
+            animarEncabezado,
         });
 
         // Pestañas del editor: Presupuesto · Asistente · PDF

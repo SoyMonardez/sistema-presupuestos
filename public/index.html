@@ -123,13 +123,10 @@
 
     <!-- Dictado / IA -->
     <div class="ai-bar">
-        <button id="btn-voice" class="tool-btn">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-            <span id="voice-label">Dictar</span>
-        </button>
-        <button id="btn-ai-text" class="tool-btn">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3L12 3z"/></svg>
-            <span>Escribir</span>
+        <!-- Modo conversación: dictarle el presupuesto de corrido -->
+        <button id="btn-conversar" class="tool-btn tool-btn-conversar" title="Conversar por voz: dictá y el asistente va cargando">
+            <span class="conversar-orbe" aria-hidden="true"></span>
+            <span>Conversar</span>
         </button>
         <button id="btn-import" class="tool-btn" title="Importar items desde un PDF o Excel">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -141,15 +138,6 @@
         </button>
     </div>
     <input type="file" id="import-file" accept=".pdf,.xlsx,.csv,image/*" hidden>
-
-    <!-- Panel de texto libre → IA -->
-    <div id="ai-panel" class="ai-panel" hidden>
-        <textarea id="ai-text" rows="3" placeholder="Ej: 20 metros cuadrados de cerámica a 15 lucas el metro — o 'pasá el item 3 a metros cúbicos', 'sacá el item 5', 'el item 2 ahora sale 300 mil'"></textarea>
-        <div class="ai-panel-actions">
-            <button id="btn-ai-cancel" class="btn btn-ghost">Cancelar</button>
-            <button id="btn-ai-send" class="btn btn-primary">Aplicar con IA</button>
-        </div>
-    </div>
 
     <!-- Borrador de cambios propuestos por la IA (agregar / editar / borrar items) -->
     <div id="draft-panel" class="draft-panel" hidden>
@@ -279,6 +267,15 @@
                 <button type="button" class="format-btn" data-format="municipal">Municipio</button>
             </div>
             <p class="field-hint" id="format-hint"></p>
+        </div>
+
+        <div class="field-group" id="municipal-orientation" hidden>
+            <span class="field-group-label">Orientación del PDF municipal</span>
+            <div class="format-switch" role="tablist" aria-label="Orientación del PDF">
+                <button type="button" class="orientation-btn active" data-orientation="landscape">Horizontal</button>
+                <button type="button" class="orientation-btn" data-orientation="portrait">Vertical · una hoja</button>
+            </div>
+            <p class="field-hint">Vertical ajusta los items para que el presupuesto completo quede en una sola hoja.</p>
         </div>
 
         <div class="field-group">
@@ -480,6 +477,32 @@
     </div>
 </div>
 
+<!-- ============ MODO CONVERSACIÓN POR VOZ ============ -->
+<div id="voz-modo" class="voz-modo" data-fase="escuchando" hidden>
+    <div class="voz-borde" aria-hidden="true"></div>
+    <div class="voz-panel" role="region" aria-label="Conversación por voz">
+        <div id="voz-tarjetas" class="voz-tarjetas" aria-live="polite"></div>
+        <p id="voz-subtitulo" class="voz-subtitulo"></p>
+        <div class="voz-barra">
+            <button id="voz-deshacer" class="voz-btn" type="button" title="Deshacer lo último" aria-label="Deshacer lo último" disabled>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>
+            </button>
+            <div class="voz-centro">
+                <canvas id="voz-orbe" class="voz-orbe" aria-hidden="true"></canvas>
+                <span id="voz-fase" class="voz-fase" aria-live="polite">Te escucho</span>
+            </div>
+            <button id="voz-salir" class="voz-btn voz-btn-salir" type="button" title="Salir del modo conversación" aria-label="Salir del modo conversación">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" width="22" height="22"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+        </div>
+        <label class="voz-auto" title="Con Auto, cada cambio se aplica solo. Sin Auto, te muestro lo que voy a hacer y espero tu sí.">
+            <input type="checkbox" id="voz-auto">
+            <span class="voz-auto-track" aria-hidden="true"><span class="voz-auto-thumb"></span></span>
+            <span>Auto: aplicar sin preguntar</span>
+        </label>
+    </div>
+</div>
+
 <!-- El orden importa: cada archivo usa los de arriba en el momento de cargarse
      (varios hacen Estado.lista() apenas se definen), así que no se pueden mover
      libremente. app.js va último: es el que pega todas las partes. -->
@@ -487,20 +510,25 @@
 <script src="js/ui.js"></script>
 <script src="js/medidas.js"></script>
 <script src="js/theme.js"></script>
-<script src="js/api.js"></script>
+<script src="js/api.js?v=25"></script>
 <script src="js/nav.js"></script>
-<script src="js/estado.js"></script>
+<script src="js/estado.js?v=25"></script>
 <script src="js/unidades.js"></script>
-<script src="js/items.js"></script>
+<script src="js/items.js?v=25"></script>
 <script src="js/borrador.js"></script>
-<script src="js/entradas.js"></script>
+<script src="js/entradas.js?v=26"></script>
 <script src="js/precios.js"></script>
 <script src="js/chat.js"></script>
 <script src="js/voice.js"></script>
-<script src="js/pdf.js"></script>
+<script src="js/pdf.js?v=24"></script>
 <!-- hablar.js va DESPUÉS de pdf.js: usa numeroALetras para leer los montos. -->
-<script src="js/hablar.js"></script>
-<script src="js/app.js"></script>
+<script src="js/hablar.js?v=25"></script>
+<!-- La conversación por voz: usa Hablar, Estado e Items, y la pega app.js. -->
+<script src="js/sonidos.js?v=25"></script>
+<script src="js/escucha.js?v=25"></script>
+<script src="js/orbe.js?v=25"></script>
+<script src="js/conversacion.js?v=26"></script>
+<script src="js/app.js?v=26"></script>
 <script>
 if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});

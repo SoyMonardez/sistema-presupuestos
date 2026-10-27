@@ -269,8 +269,77 @@ const Items = (() => {
         }
     });
 
+    // ================= Animaciones de la conversación por voz =================
+    // Cuando el asistente carga algo por voz, él tiene que VER que pasó: la
+    // tarjeta entra brillando, el nombre se escribe solo y los números suben
+    // hasta su valor. Es lo que reemplaza a la tarjeta de "¿aplico?" del chat.
+    //
+    // Todas trabajan sobre lo que dejó render(): se llaman después de repintar.
+    const sinMovimiento = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const tarjeta = (idx) => $('#items-list')?.children[idx] || null;
+
+    function destacar(el, clase, ms) {
+        if (!el) return;
+        el.classList.remove(clase);
+        void el.offsetWidth;   // reinicia la animación si ya la tenía
+        el.classList.add(clase);
+        setTimeout(() => el.classList.remove(clase), ms);
+    }
+
+    function contar(dura, alAvanzar) {
+        const t0 = performance.now();
+        const paso = (t) => {
+            const p = Math.min(1, (t - t0) / dura);
+            alAvanzar(1 - Math.pow(1 - p, 3));   // arranca rápido y frena al llegar
+            if (p < 1) requestAnimationFrame(paso);
+        };
+        requestAnimationFrame(paso);
+    }
+
+    function animarAlta(idx) {
+        const card = tarjeta(idx);
+        const item = items[idx];
+        if (!card || !item) return;
+        card.scrollIntoView({ block: 'center', behavior: sinMovimiento() ? 'auto' : 'smooth' });
+        destacar(card, 'voz-alta', 1600);
+        if (sinMovimiento()) return;
+
+        const texto = card.querySelector('.ic-desc-text');
+        const nombre = item.name || '';
+        const qtyEl = card.querySelector('.f-qty');
+        const priceEl = card.querySelector('.f-price');
+        const subAmt = card.querySelector('.ic-sub-amount');
+        if (texto && nombre) texto.textContent = '';
+        contar(700, (p) => {
+            if (texto && nombre) texto.textContent = nombre.slice(0, Math.ceil(nombre.length * p));
+            if (priceEl) priceEl.value = numToInput(Math.round(item.unit_price * p));
+            if (subAmt) subAmt.textContent = formatARS(item.quantity * item.unit_price * p);
+            if (qtyEl && p === 1) qtyEl.value = item.quantity ? String(item.quantity).replace('.', ',') : '';
+        });
+    }
+
+    const SELECTOR_CAMPO = { name: '.ic-desc', detail: '.ic-detail-toggle', quantity: '.f-qty', unit: '.f-unit', unit_price: '.f-price' };
+
+    function animarCambio(idx, campos = {}) {
+        const card = tarjeta(idx);
+        if (!card) return;
+        card.scrollIntoView({ block: 'center', behavior: sinMovimiento() ? 'auto' : 'smooth' });
+        destacar(card, 'voz-cambio', 1400);
+        for (const campo of Object.keys(campos)) {
+            destacar(card.querySelector(SELECTOR_CAMPO[campo]), 'voz-campo', 1400);
+        }
+    }
+
+    /** La tarjeta se va achicando. Devuelve una promesa: borrar recién al final. */
+    function animarBaja(idx) {
+        const card = tarjeta(idx);
+        if (!card || sinMovimiento()) return Promise.resolve();
+        card.classList.add('voz-baja');
+        return new Promise(r => setTimeout(r, 420));
+    }
+
     // Repintar la lista es cosa de este módulo: el estado avisa, acá se dibuja.
     Estado.conectar({ onRender: render });
 
-    return { render };
+    return { render, animarAlta, animarCambio, animarBaja };
 })();

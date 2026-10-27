@@ -1,0 +1,214 @@
+// La cara de la conversación por voz: el orbe, el brillo de los bordes, el
+// subtítulo y las tarjetas de "pienso hacer…".
+//
+// Tiene que quedar claro de un vistazo, y de lejos, en qué anda el asistente.
+// Por eso cada fase tiene su color y su forma de moverse, y el borde de toda la
+// pantalla brilla con ese mismo color mientras el modo está prendido:
+//
+//   escuchando → celeste, respira con la voz de él
+//   pensando   → violeta, gira
+//   haciendo   → naranja, late
+//   hablando   → verde agua, se mueve con la voz del asistente
+//
+// Los colores viven en el CSS (--voz-a / --voz-b de cada [data-fase]); acá solo
+// se leen para pintar el canvas. Este módulo no decide nada: dibuja lo que le
+// dice conversacion.js.
+
+const Orbe = (() => {
+    const { $ } = UI;
+
+    const ETIQUETAS = {
+        escuchando: 'Te escucho',
+        pensando: 'Pensando…',
+        haciendo: 'Cargando…',
+        hablando: 'Hablando',
+        esperando: 'Esperando tu OK',
+    };
+    const MAX_TARJETAS = 4;
+
+    let raiz, canvas, g2d, faseEl, subEl, tarjetasEl, deshacerBtn, autoInput;
+    let fase = 'escuchando';
+    let colores = ['#38bdf8', '#6366f1'];
+    let cuadro = null;
+    let medirNivel = () => 0;
+    let suavizado = 0;
+
+    function init({ onSalir, onDeshacer, onAuto, nivel }) {
+        raiz = $('#voz-modo');
+        canvas = $('#voz-orbe');
+        g2d = canvas.getContext('2d');
+        faseEl = $('#voz-fase');
+        subEl = $('#voz-subtitulo');
+        tarjetasEl = $('#voz-tarjetas');
+        deshacerBtn = $('#voz-deshacer');
+        autoInput = $('#voz-auto');
+        if (nivel) medirNivel = nivel;
+
+        $('#voz-salir').addEventListener('click', () => onSalir?.());
+        deshacerBtn.addEventListener('click', () => onDeshacer?.());
+        autoInput.addEventListener('change', () => onAuto?.(autoInput.checked));
+    }
+
+    function abrir({ auto }) {
+        raiz.hidden = false;
+        document.body.classList.add('voz-activa');
+        autoInput.checked = auto;
+        tarjetasEl.innerHTML = '';
+        subtitulo('');
+        cambiarFase('escuchando');
+        ajustarCanvas();
+        if (!cuadro) cuadro = requestAnimationFrame(dibujar);
+    }
+
+    function cerrar() {
+        raiz.hidden = true;
+        document.body.classList.remove('voz-activa');
+        cancelAnimationFrame(cuadro);
+        cuadro = null;
+    }
+
+    function cambiarFase(nueva) {
+        if (!raiz || nueva === fase && raiz.dataset.fase === nueva) return;
+        fase = nueva;
+        raiz.dataset.fase = nueva;
+        faseEl.textContent = ETIQUETAS[nueva] || '';
+        const css = getComputedStyle(raiz);
+        colores = [css.getPropertyValue('--voz-a').trim() || colores[0], css.getPropertyValue('--voz-b').trim() || colores[1]];
+    }
+
+    /** Lo que está diciendo él. `provisorio`: todavía puede cambiar. */
+    function subtitulo(texto, { provisorio = false } = {}) {
+        if (!subEl) return;
+        subEl.textContent = texto || '';
+        subEl.classList.toggle('provisorio', provisorio);
+    }
+
+    function permitirDeshacer(si) { if (deshacerBtn) deshacerBtn.disabled = !si; }
+
+    // ---------- Tarjetas ----------
+    /**
+     * Una tarjeta por turno: lo que pidió, lo que piensa hacer (se va
+     * escribiendo) y, si no está en Auto, los botones para aceptar o no.
+     */
+    function nuevaTarjeta(pedidos) {
+        const el = document.createElement('div');
+        el.className = 'voz-tarjeta pensando';
+        el.innerHTML = `
+            <div class="voz-t-cabeza"><span class="voz-t-punto"></span><span class="voz-t-titulo">Pensando…</span></div>
+            <p class="voz-t-pedido"></p>
+            <p class="voz-t-pensamiento"></p>
+            <div class="voz-t-acciones" hidden>
+                <button type="button" class="voz-t-dejar">Dejalo</button>
+                <button type="button" class="voz-t-aplicar">Aplicar</button>
+            </div>`;
+        el.querySelector('.voz-t-pedido').textContent = `“${pedidos.join(' · ')}”`;
+        tarjetasEl.appendChild(el);
+        while (tarjetasEl.children.length > MAX_TARJETAS) tarjetasEl.firstElementChild.remove();
+        el.scrollIntoView({ block: 'nearest' });
+
+        const titulo = el.querySelector('.voz-t-titulo');
+        const pensamiento = el.querySelector('.voz-t-pensamiento');
+        const acciones = el.querySelector('.voz-t-acciones');
+        const estado = (clase, texto) => {
+            el.className = `voz-tarjeta ${clase}`;
+            titulo.textContent = texto;
+            acciones.hidden = true;
+        };
+
+        return {
+            pensamiento(trozo) { pensamiento.textContent += trozo; },
+            fijarPensamiento(texto) { if (texto) pensamiento.textContent = texto; },
+            propuesta({ onAplicar, onDejar }) {
+                estado('propuesta', 'Pienso hacer esto');
+                acciones.hidden = false;
+                el.querySelector('.voz-t-aplicar').onclick = () => onAplicar?.();
+                el.querySelector('.voz-t-dejar').onclick = () => onDejar?.();
+            },
+            haciendo() { estado('haciendo', 'Cargando…'); },
+            aplicada() { estado('aplicada', 'Listo'); },
+            descartada() { estado('descartada', 'Descartado'); },
+            info() { estado('info', 'Respuesta'); },
+            error(msg) { estado('error', 'No pude'); pensamiento.textContent = msg; },
+        };
+    }
+
+    // ---------- El orbe ----------
+    function ajustarCanvas() {
+        const dpr = window.devicePixelRatio || 1;
+        const lado = canvas.clientWidth || 96;
+        canvas.width = lado * dpr;
+        canvas.height = lado * dpr;
+        g2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    // Ruido suave hecho con senos: alcanza para que el borde ondule orgánico sin
+    // traer una librería de Perlin.
+    function ondulacion(angulo, t, semilla) {
+        return Math.sin(angulo * 3 + t * 1.3 + semilla) * 0.5
+             + Math.sin(angulo * 5 - t * 1.7 + semilla * 2) * 0.3
+             + Math.sin(angulo * 2 + t * 0.9) * 0.2;
+    }
+
+    function dibujar(ms) {
+        cuadro = requestAnimationFrame(dibujar);
+        const lado = canvas.clientWidth || 96;
+        const c = lado / 2;
+        const t = ms / 1000;
+
+        const crudo = medirNivel() || 0;
+        suavizado += (crudo - suavizado) * 0.25;
+
+        // Cada fase se mueve distinto: así se distingue aunque no se vea el color.
+        let radio = lado * 0.3, amp = 0.04, giro = t * 0.4;
+        if (fase === 'escuchando') { radio *= 1 + suavizado * 0.25; amp = 0.03 + suavizado * 0.18; }
+        else if (fase === 'pensando') { amp = 0.07; giro = t * 2.2; }
+        else if (fase === 'haciendo') { radio *= 1 + Math.sin(t * 9) * 0.06; amp = 0.05; }
+        else if (fase === 'hablando') {
+            // La voz del aparato no se puede medir: se simula una onda de habla.
+            const v = crudo || (0.35 + Math.sin(t * 11) * 0.2 + Math.sin(t * 7.3) * 0.15);
+            radio *= 1 + v * 0.18; amp = 0.05 + v * 0.12;
+        }
+        else if (fase === 'esperando') { radio *= 1 + Math.sin(t * 2) * 0.03; amp = 0.02; }
+
+        g2d.clearRect(0, 0, lado, lado);
+
+        // Halo
+        const halo = g2d.createRadialGradient(c, c, radio * 0.6, c, c, radio * 1.6);
+        halo.addColorStop(0, colores[0] + '55');
+        halo.addColorStop(1, colores[0] + '00');
+        g2d.fillStyle = halo;
+        g2d.fillRect(0, 0, lado, lado);
+
+        // Cuerpo: dos capas desfasadas, para que tenga volumen.
+        for (const [capa, alfa] of [[0, 'cc'], [1, 'ff']]) {
+            g2d.beginPath();
+            const puntos = 64;
+            for (let i = 0; i <= puntos; i++) {
+                const a = (i / puntos) * Math.PI * 2;
+                const r = radio * (1 - capa * 0.12) * (1 + amp * ondulacion(a + giro * (capa ? -1 : 1), t, capa * 1.7));
+                const x = c + Math.cos(a) * r;
+                const y = c + Math.sin(a) * r;
+                if (i === 0) g2d.moveTo(x, y); else g2d.lineTo(x, y);
+            }
+            g2d.closePath();
+            const grad = g2d.createLinearGradient(c - radio, c - radio, c + radio, c + radio);
+            grad.addColorStop(0, colores[capa ? 0 : 1] + alfa);
+            grad.addColorStop(1, colores[capa ? 1 : 0] + alfa);
+            g2d.fillStyle = grad;
+            g2d.fill();
+        }
+
+        // Brillo arriba a la izquierda
+        const brillo = g2d.createRadialGradient(c - radio * 0.35, c - radio * 0.4, 0, c - radio * 0.35, c - radio * 0.4, radio * 0.7);
+        brillo.addColorStop(0, 'rgba(255,255,255,0.45)');
+        brillo.addColorStop(1, 'rgba(255,255,255,0)');
+        g2d.fillStyle = brillo;
+        g2d.beginPath();
+        g2d.arc(c, c, radio * 0.95, 0, Math.PI * 2);
+        g2d.fill();
+    }
+
+    window.addEventListener('resize', () => { if (cuadro) ajustarCanvas(); });
+
+    return { init, abrir, cerrar, cambiarFase, subtitulo, permitirDeshacer, nuevaTarjeta };
+})();
