@@ -414,6 +414,10 @@ const Hablar = (() => {
     // El orbe de la conversación se mueve con el volumen de la voz. Solo se
     // puede medir el MP3 (pasa por Web Audio); la voz del aparato no se deja.
     function conectarMedidor(audio) {
+        // En el celular el audio va directo al parlante, sin pasar por Web
+        // Audio: en algunos teléfonos esa salida queda atada al "modo llamada"
+        // (parlante de la oreja, bajito). El orbe simula la onda al hablar.
+        if (window.matchMedia?.('(pointer: coarse)').matches) return null;
         const ctx = typeof Sonidos !== 'undefined' ? Sonidos.contexto() : null;
         if (!ctx) return null;
         try {

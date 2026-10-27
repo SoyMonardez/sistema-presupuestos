@@ -139,6 +139,12 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
     const L = ConversacionLogica;
 
     const CLAVE_AUTO = 'presu_voz_auto';
+    // En el celular, mientras el asistente habla se suelta el micrófono: con
+    // el micrófono abierto el teléfono queda en "modo llamada" y el sonido sale
+    // bajito por el parlante de la oreja (ver Escucha.pausarMic). En la PC no
+    // pasa, así que ahí sigue escuchando siempre y se lo puede cortar hablando.
+    const ALTAVOZ = window.matchMedia('(pointer: coarse)').matches;
+    let reabriendoMic = false;
     const CIERRE_TURNO_MS = 2000;   // sin hablar este rato, lo que quedó partido se manda igual
     const ACUSE_MS = 1300;          // si pensar tarda más que esto, contesta algo corto
     const MAX_HISTORIAL = 12;
@@ -191,6 +197,12 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
                 if (v && pendientes.length) aplicarHasta(pendientes.length - 1);
             },
             nivel: () => (Hablar.estaHablando() ? Hablar.nivel() : Escucha.nivel()),
+            // Tocar el orbe mientras habla lo calla.
+            onTocar: () => {
+                if (!Hablar.estaHablando()) return false;
+                Hablar.callar();
+                return true;
+            },
         });
         $('#btn-conversar').addEventListener('click', () => (activo ? salir() : entrar()));
         document.addEventListener('keydown', (e) => { if (activo && e.key === 'Escape') salir(); });
@@ -256,6 +268,9 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
         // para saber hasta cuándo su eco puede seguir llegando.
         const dura = (String(texto).length / 14) * 1000;
         dichosRecientes.push({ texto, hasta: Date.now() + dura + ECO_MS });
+        // Antes de que empiece a sonar: con el micrófono suelto, el celular
+        // usa el altavoz.
+        if (ALTAVOZ) Escucha.pausarMic();
         Hablar.encolar(texto);
     }
 
@@ -502,8 +517,21 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
         if (!activo) return;
         const hablando = Hablar.estaHablando();
 
-        // Terminó de hablar: "te toca".
-        if (estabaHablando && !hablando) Sonidos.teEscucho();
+        // Terminó de hablar: "te toca". En el celular primero se vuelve a abrir
+        // el micrófono, y el sonido avisa recién cuando ya está escuchando.
+        //
+        // No depende de ver el momento justo en que termina: si el micrófono
+        // está en pausa y no está hablando (una frase cortísima que terminó
+        // entre dos latidos, o una que quedó vacía), se reabre igual.
+        if (ALTAVOZ && Escucha.micEnPausa() && !hablando && !reabriendoMic) {
+            reabriendoMic = true;
+            Escucha.reanudarMic().then(ok => {
+                reabriendoMic = false;
+                if (ok && activo) Sonidos.teEscucho();
+            });
+        } else if (!ALTAVOZ && estabaHablando && !hablando) {
+            Sonidos.teEscucho();
+        }
         estabaHablando = hablando;
 
         const ocupado = pensando || aplicando || cortesEnVuelo > 0 || colaPedidos.length > 0 || Boolean(resto) || hablando;
