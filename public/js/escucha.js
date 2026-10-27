@@ -34,6 +34,9 @@ const Escucha = (() => {
     let ctx = null;
     let moduloEn = null;            // en qué AudioContext ya se cargó el worklet
     let nodo = null;
+    let fuente = null;              // el micrófono conectado al worklet
+    let micPausado = false;
+    let reabriendo = null;
     let ws = null;
     let modo = null;                // 'vivo' | 'respaldo'
     let activa = false;
@@ -68,11 +71,7 @@ const Escucha = (() => {
         cb = c;
         presupuesto = c.presupuesto || null;
         try {
-            stream = await navigator.mediaDevices.getUserMedia({
-                // Sin cancelación de eco se escucharía a sí mismo hablando por
-                // el parlante y se contestaría solo.
-                audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
-            });
+            stream = await pedirMicrofono();
         } catch (err) {
             cb.onError?.(err.name === 'NotAllowedError' || err.name === 'SecurityError'
                 ? 'Permití el acceso al micrófono (candado en la barra de direcciones).'
@@ -89,14 +88,15 @@ const Escucha = (() => {
                 await ctx.audioWorklet.addModule('/js/pcm-worklet.js');
                 moduloEn = ctx;
             }
-            const fuente = ctx.createMediaStreamSource(stream);
             nodo = new AudioWorkletNode(ctx, 'pcm-worklet');
             nodo.port.onmessage = (e) => alRecibirAudio(e.data);
             // El worklet no produce sonido, pero tiene que estar conectado a la
             // salida para que el navegador lo haga correr. Con ganancia 0, mudo.
             const mudo = ctx.createGain();
             mudo.gain.value = 0;
-            fuente.connect(nodo).connect(mudo).connect(ctx.destination);
+            nodo.connect(mudo).connect(ctx.destination);
+            fuente = ctx.createMediaStreamSource(stream);
+            fuente.connect(nodo);
         } catch (err) {
             detener();
             cb.onError?.('Este navegador no deja procesar el micrófono en vivo.');
@@ -105,6 +105,64 @@ const Escucha = (() => {
 
         if (!(await conectarScribe())) usarRespaldo();
         return true;
+    }
+
+    // ---------- Micrófono abierto o en pausa (altavoz del celular) ----------
+    // Con el micrófono capturando, el celular se pone en "modo llamada" y saca
+    // el sonido por el parlante chico de la oreja, bajito. Ni Android ni iPhone
+    // dejan que una página fuerce el altavoz con el micrófono abierto. Lo que sí
+    // funciona: soltar el micrófono mientras habla el asistente y volver a
+    // abrirlo cuando termina. Lo decide conversacion.js (solo en celulares).
+    function sesionDeAudio(tipo) {
+        // Safari: pedirle "reproducción" mientras habla, para que vaya al altavoz.
+        try { if (navigator.audioSession) navigator.audioSession.type = tipo; } catch {}
+    }
+
+    function pedirMicrofono() {
+        sesionDeAudio('auto');
+        return navigator.mediaDevices.getUserMedia({
+            // Sin cancelación de eco se escucharía a sí mismo hablando por
+            // el parlante y se contestaría solo.
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+        });
+    }
+
+    /** Suelta el micrófono (el WebSocket sigue abierto, sin mandar nada). */
+    function pausarMic() {
+        if (!activa || micPausado) return;
+        micPausado = true;
+        try { fuente?.disconnect(); } catch {}
+        fuente = null;
+        stream?.getTracks().forEach(t => t.stop());
+        stream = null;
+        juntando = null;
+        bloquesConVoz = 0;
+        nivelActual = 0;
+        if (hablaba) { hablaba = false; cb.onHabla?.(false); }
+        sesionDeAudio('playback');
+    }
+
+    /** Vuelve a abrir el micrófono. Devuelve false si no se pudo. */
+    async function reanudarMic() {
+        if (!activa || !micPausado) return true;
+        if (reabriendo) return reabriendo;
+        reabriendo = (async () => {
+            try {
+                const nuevo = await pedirMicrofono();
+                if (!activa) { nuevo.getTracks().forEach(t => t.stop()); return false; }
+                stream = nuevo;
+                fuente = ctx.createMediaStreamSource(stream);
+                fuente.connect(nodo);
+                micPausado = false;
+                return true;
+            } catch {
+                cb.onError?.('No se pudo volver a abrir el micrófono. Tocá el orbe para seguir.');
+                return false;
+            } finally {
+                reabriendo = null;
+            }
+        })();
+        return reabriendo;
     }
 
     // ---------- En vivo: Scribe ----------
@@ -261,7 +319,7 @@ const Escucha = (() => {
 
     // ---------- Cada bloque de 100 ms ----------
     function alRecibirAudio({ pcm, rms }) {
-        if (!activa) return;
+        if (!activa || micPausado) return;
         const ahora = Date.now();
         nivelActual = Math.min(1, rms * 6);
 
@@ -283,8 +341,13 @@ const Escucha = (() => {
         const socket = ws;
         ws = null;
         try { socket?.close(); } catch {}
+        try { fuente?.disconnect(); } catch {}
+        fuente = null;
         try { nodo?.disconnect(); } catch {}
         nodo = null;
+        micPausado = false;
+        reabriendo = null;
+        sesionDeAudio('auto');
         stream?.getTracks().forEach(t => t.stop());
         stream = null;
         previo = [];
@@ -298,5 +361,5 @@ const Escucha = (() => {
     const estaHablando = () => hablaba;
     const modoActual = () => modo;
 
-    return { soportada, iniciar, detener, nivel, estaHablando, modoActual };
+    return { soportada, iniciar, detener, nivel, estaHablando, modoActual, pausarMic, reanudarMic, micEnPausa: () => micPausado };
 })();

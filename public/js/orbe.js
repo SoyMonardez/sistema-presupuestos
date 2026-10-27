@@ -43,7 +43,13 @@ const Orbe = (() => {
     const leer = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
     const guardar = (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} };
 
-    function init({ onSalir, onDeshacer, onAuto, nivel }) {
+    // Tocar el orbe mientras habla lo calla (en el celular, con el micrófono en
+    // pausa para que suene por el altavoz, es la forma de interrumpirlo).
+    // `alTocar` devuelve true si se ocupó del toque.
+    let alTocar = () => false;
+
+    function init({ onSalir, onDeshacer, onAuto, nivel, onTocar }) {
+        if (onTocar) alTocar = onTocar;
         raiz = $('#voz-modo');
         canvas = $('#voz-orbe');
         g2d = canvas.getContext('2d');
@@ -59,6 +65,7 @@ const Orbe = (() => {
         $('#voz-minimizar').addEventListener('click', () => minimizar());
         prepararDeslizar($('#voz-cabeza'));
         prepararArrastre(flotante);
+        canvas.addEventListener('click', () => { if (!mini) alTocar(); });
 
         $('#voz-salir').addEventListener('click', () => onSalir?.());
         deshacerBtn.addEventListener('click', () => onDeshacer?.());
@@ -142,7 +149,7 @@ const Orbe = (() => {
             inicio = null;
             el.classList.remove('arrastrando');
             if (movio) guardar(clavePosicion(), `${parseInt(el.style.left)},${parseInt(el.style.top)}`);
-            else expandir();
+            else if (!alTocar()) expandir();
         };
         el.addEventListener('pointerup', soltar);
         el.addEventListener('pointercancel', () => { inicio = null; el.classList.remove('arrastrando'); });
