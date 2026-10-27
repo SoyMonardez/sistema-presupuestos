@@ -5,6 +5,9 @@ const MODEL_ID = process.env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2';
 // La conversación por voz necesita que la primera sílaba llegue rápido más que
 // la mejor entonación: Flash tarda una fracción de multilingual_v2.
 const FAST_MODEL_ID = process.env.ELEVENLABS_FAST_MODEL_ID || 'eleven_flash_v2_5';
+// Velocidad de habla: 1 es la normal de la voz; ElevenLabs acepta de 0.7 a 1.2.
+// Probado en el celular, a 1 se escuchaba lento para una conversación.
+const SPEED = Math.min(1.2, Math.max(0.7, Number(process.env.ELEVENLABS_SPEED) || 1.1));
 
 export function isConfigured() {
     return Boolean(process.env.ELEVENLABS_API_KEY);
@@ -23,7 +26,7 @@ export async function synthesize(text, { rapida = false } = {}) {
             text: String(text || '').slice(0, 3000),
             model_id: rapida ? FAST_MODEL_ID : MODEL_ID,
             language_code: 'es',
-            voice_settings: { stability: 0.55, similarity_boost: 0.7, style: 0, use_speaker_boost: true },
+            voice_settings: { stability: 0.55, similarity_boost: 0.7, style: 0, use_speaker_boost: true, speed: SPEED },
         }),
         signal: AbortSignal.timeout(rapida ? 20000 : 45000),
     });
