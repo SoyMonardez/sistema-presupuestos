@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import db, { loadUnitCatalog } from '../db.js';
 import { canonicalLabel } from '../lib/units.js';
+import { asegurarEsquema, prepararPresupuesto, registrarVersion, uidValido, nuevoUid } from '../lib/historial.js';
 
 const router = Router();
 
@@ -29,6 +30,8 @@ router.post('/', (req, res) => {
 router.get('/:id', (req, res) => {
     const budget = getStmt.get(req.params.id);
     if (!budget) return res.status(404).json({ error: 'No existe' });
+    // Uid a los items viejos y primera versión del historial (ver lib/historial.js).
+    prepararPresupuesto(budget.id);
     const items = itemsStmt.all(budget.id);
     const total = items.reduce((sum, i) => sum + i.quantity * i.unit_price, 0);
     res.json({ ...budget, items, total });
@@ -70,7 +73,7 @@ const replaceItems = db.transaction((budgetId, items) => {
 
     db.prepare('DELETE FROM items WHERE budget_id = ?').run(budgetId);
     const insert = db.prepare(
-        'INSERT INTO items (budget_id, name, quantity, unit, unit_price, position, detail) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO items (budget_id, name, quantity, unit, unit_price, position, detail, uid) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
     );
     items.forEach((item, i) => {
         insert.run(
@@ -80,7 +83,10 @@ const replaceItems = db.transaction((budgetId, items) => {
             canonicalLabel(item.unit || 'un.', catalog),
             Number(item.unit_price) || 0,
             i,
-            String(item.detail || '').slice(0, 1000)
+            String(item.detail || '').slice(0, 1000),
+            // El uid lo pone la pantalla y no cambia nunca: es lo que permite
+            // seguir la historia de un item aunque lo renombren o lo muevan.
+            uidValido(item.uid) ? item.uid : nuevoUid()
         );
     });
     db.prepare(`UPDATE budgets SET updated_at = datetime('now') WHERE id = ?`).run(budgetId);
@@ -92,8 +98,17 @@ router.put('/:id/items', (req, res) => {
     const items = Array.isArray(req.body?.items) ? req.body.items : null;
     if (!items) return res.status(400).json({ error: 'Falta items[]' });
     if (items.length > 200) return res.status(400).json({ error: 'Demasiados items' });
+    asegurarEsquema();
     replaceItems(budget.id, items);
     const saved = itemsStmt.all(budget.id);
+    // Quién hizo el cambio: 'voz', 'chat', 'ia' o 'manual' (lo manda Estado).
+    const origen = ['voz', 'chat', 'ia', 'deshacer', 'manual'].includes(req.get('X-Origen')) ? req.get('X-Origen') : 'manual';
+    try {
+        registrarVersion(budget.id, saved, origen);
+    } catch (err) {
+        // El historial es una ayuda: si falla, el guardado igual vale.
+        console.error('[historial]', err.message);
+    }
     const total = saved.reduce((sum, i) => sum + i.quantity * i.unit_price, 0);
     res.json({ items: saved, total });
 });

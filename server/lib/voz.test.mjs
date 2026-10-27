@@ -21,6 +21,8 @@ for (const [texto, tipo] of [
     ['sí a todo', 'confirmar_todo'], ['aplicá todo', 'confirmar_todo'],
     ['no', 'rechazar'], ['dejalo así', 'rechazar'], ['mejor no', 'rechazar'],
     ['deshacé eso', 'deshacer'], ['volvé atrás', 'deshacer'], ['deshacelo', 'deshacer'],
+    ['volvé al cambio anterior', 'deshacer'], ['no, volvé a como estaba', 'deshacer'], ['dejalo como estaba', 'deshacer'],
+    ['anulá eso', 'deshacer'], ['deshacé el último cambio', 'deshacer'], ['volvé a la versión anterior', 'deshacer'],
     ['listo, terminamos', 'salir'], ['chau', 'salir'], ['eso es todo, gracias', 'salir'],
 ]) {
     prueba(`atajo: "${texto}" → ${tipo}`, atajo(texto) === tipo);
@@ -30,6 +32,8 @@ for (const texto of [
     'no, el precio es 300 mil',
     'agregá un item de demolición',
     'deshacé el item 3 y poné otro',
+    'el contrapiso dejalo como estaba',
+    'volvé el precio de la demolición al anterior',
     '',
 ]) {
     prueba(`atajo: "${texto}" no es atajo`, atajo(texto) === null);

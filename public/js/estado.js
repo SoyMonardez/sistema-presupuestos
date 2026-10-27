@@ -31,6 +31,22 @@ const Estado = (() => {
     let repintar = () => {};
 
     let saveTimer = null;
+    // Quién hizo el cambio que se va a guardar: queda en el historial del
+    // servidor ('voz', 'chat', 'ia', 'deshacer' o 'manual').
+    let origenPendiente = 'manual';
+
+    /**
+     * Cada item lleva un uid que no cambia nunca. Con eso el historial sabe que
+     * "Contrapiso" a 15 mil y "Contrapiso de 8 cm" a 18 mil son el mismo item.
+     */
+    function nuevoUid() {
+        if (window.crypto?.randomUUID) return crypto.randomUUID();
+        return 'u' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    }
+    function conUid(item) {
+        if (item && !item.uid) item.uid = nuevoUid();
+        return item;
+    }
 
     /**
      * Le enseña al estado lo que solo el editor sabe: cómo leer y escribir su
@@ -61,11 +77,11 @@ const Estado = (() => {
     /** Vacía y rellena en el sitio: la identidad del array no cambia (ver arriba). */
     function reemplazarItems(nuevos) {
         items.length = 0;
-        for (const i of nuevos || []) items.push(i);
+        for (const i of nuevos || []) items.push(conUid(i));
     }
 
     function agregarItem(item) {
-        items.push(item);
+        items.push(conUid(item));
         return items.length - 1;
     }
 
@@ -81,7 +97,10 @@ const Estado = (() => {
     function render() { repintar(); }
 
     // ---------- Guardado ----------
-    function scheduleSave() {
+    function scheduleSave(origen) {
+        // Un cambio de la IA no se pisa con 'manual' si él toca algo antes de
+        // que salga el guardado: lo importante es que quede quién empezó.
+        if (origen && origenPendiente === 'manual') origenPendiente = origen;
         $('#save-status').textContent = 'Guardando…';
         clearTimeout(saveTimer);
         saveTimer = setTimeout(flushSave, 900);
@@ -116,10 +135,12 @@ const Estado = (() => {
         const id = presupuesto.id;
         const aGuardar = items.map(i => ({ ...i }));
         const campos = leerCampos();
+        const origen = origenPendiente;
+        origenPendiente = 'manual';
 
         try {
             await API.updateBudget(id, campos);
-            await API.saveItems(id, aGuardar);
+            await API.saveItems(id, aGuardar, origen);
             $('#save-status').textContent = 'Guardado';
             setTimeout(() => { if ($('#save-status').textContent === 'Guardado') $('#save-status').textContent = ''; }, 1500);
         } catch (err) {
@@ -152,14 +173,14 @@ const Estado = (() => {
             .map(o => o.num)
             .sort((a, b) => b - a)
             .forEach(num => items.splice(num - 1, 1));
-        ops.filter(o => o.action === 'add').forEach(op => items.push(op.item));
+        ops.filter(o => o.action === 'add').forEach(op => items.push(conUid({ ...op.item })));
     }
 
     /** Lo de arriba más repintar y guardar: es lo que quiere casi todo el que llama. */
-    function aplicarYGuardar(ops) {
+    function aplicarYGuardar(ops, origen = 'ia') {
         aplicarOps(ops);
         render();
-        scheduleSave();
+        scheduleSave(origen);
     }
 
     // ---------- Encabezado y deshacer (conversación por voz) ----------
@@ -194,7 +215,7 @@ const Estado = (() => {
         reemplazarItems(foto.items);
         escribirCampos(foto.campos);
         render();
-        scheduleSave();
+        scheduleSave('deshacer');
         return true;
     }
 

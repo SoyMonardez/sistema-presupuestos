@@ -17,7 +17,10 @@ const ATAJOS = [
     ['confirmar_todo', new RegExp(`^\\s*(s[ií]+,?\\s*)?(a todo|todo|aplic[aá] todo|aplicalos todos|todos|hac[eé] todo)${FIN}`, 'i')],
     ['confirmar',      new RegExp(`^\\s*(s[ií]+|dale|ok(ey)?|listo|aplica(lo|r)?|aplic[aá]|hacelo|obvio|correcto|perfecto|va|vale|confirmo|adelante|de una|s[ií],? dale|s[ií],? hacelo|s[ií],? aplicalo|met[eé]lo|agregalo|cargalo)${FIN}`, 'i')],
     ['rechazar',       new RegExp(`^\\s*(no|nel|nop|dej[aá](lo)?|dejalo as[ií]|olvidalo|cancel(a|ar|alo|á)?|mejor no|no,? dejalo|nada)${FIN}`, 'i')],
-    ['deshacer',       new RegExp(`^\\s*((dale,?\\s*)?(deshac[eé](lo)?|deshacer|volv[eé] (para )?atr[aá]s|sac[aá] lo [uú]ltimo|borr[aá] lo [uú]ltimo)(\\s+(eso|lo [uú]ltimo|el [uú]ltimo))?)${FIN}`, 'i')],
+    // Solo las formas genéricas ("volvé al cambio anterior"). Las que nombran un
+    // item ("el contrapiso dejalo como estaba") van a Claude, que tiene el
+    // historial de cada item (ver lib/historial.js).
+    ['deshacer',       new RegExp(`^\\s*((no,?\\s*|dale,?\\s*|che,?\\s*|eh,?\\s*)?(deshac[eé](lo)?|deshacer|anul[aá](lo)?|revert[ií](lo)?|volv[eé](lo)?( todo)? (para )?atr[aá]s|volv[eé] (al|a la) (cambio|versi[oó]n) anterior|volv[eé]( todo)? a como estaba|dej[aá](lo)? como estaba|devolv[eé](lo)? como estaba|sac[aá] lo [uú]ltimo|borr[aá] lo [uú]ltimo|el cambio anterior)(\\s+(eso|lo [uú]ltimo|el [uú]ltimo( cambio)?|ese cambio|lo que hiciste|por favor))?)${FIN}`, 'i')],
     ['salir',          new RegExp(`^\\s*((listo,?\\s*|bueno,?\\s*)?(terminamos|termin[eé]|chau|nada m[aá]s|eso es todo|sal[ií](r)?( del modo)?|cerr[aá]( el modo)?|apag[aá]te)(,?\\s*gracias)?|gracias,? (eso es todo|terminamos|chau))${FIN}`, 'i')],
 ];
 

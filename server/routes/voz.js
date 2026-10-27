@@ -27,6 +27,7 @@ import { unitsPromptBlock } from './units.js';
 import { loadSettings } from './settings.js';
 import { markupPromptBlock } from '../lib/markup.js';
 import { OPS_FORMATO, vocabularioDelPresupuesto } from './ai.js';
+import { historialPromptBlock, REGLAS_DESHACER } from '../lib/historial.js';
 
 const router = Router();
 
@@ -164,6 +165,7 @@ router.post('/turno', async (req, res) => {
     const items = (Array.isArray(req.body?.items) ? req.body.items : []).slice(0, 200);
     const encabezado = req.body?.encabezado && typeof req.body.encabezado === 'object' ? req.body.encabezado : {};
     const auto = req.body?.auto === true;
+    const presupuestoId = Number(req.body?.presupuesto);
 
     if (!instrucciones.length) return res.status(400).json({ error: 'No llegó ningún pedido' });
 
@@ -184,7 +186,11 @@ router.post('/turno', async (req, res) => {
     const system = TURNO_SYSTEM(auto) + unitsPromptBlock() + priceRefsPromptBlock()
         // El bloque de la empresa le pide explicar el coeficiente en la
         // respuesta; hablado eso es un párrafo que nadie quiere escuchar.
-        + markupPromptBlock(markup).split('\n').filter(l => !l.includes('"reply"')).join('\n');
+        + markupPromptBlock(markup).split('\n').filter(l => !l.includes('"reply"')).join('\n')
+        // Con el historial puede entender "volvé al precio anterior" o
+        // "recuperá el que borré" (ver lib/historial.js).
+        + REGLAS_DESHACER
+        + historialPromptBlock(presupuestoId, items);
 
     const contexto = {
         encabezado: normalizeEncabezado(encabezado),

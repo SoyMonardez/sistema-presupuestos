@@ -112,16 +112,23 @@ const ConversacionLogica = (() => {
      * transcribe lo que se cuela. Si casi todas las palabras están en algo que
      * acaba de decir, es eco y no un pedido.
      */
+    //
+    // Se comparan pares de palabras seguidas y no palabras sueltas: el eco
+    // repite la frase en el mismo orden, mientras que un pedido nuevo comparte
+    // palabras sueltas con lo que se acaba de decir ("el contrapiso quedó a 18
+    // mil" → "ahora el contrapiso a 21 mil"). Con palabras sueltas, ese pedido
+    // se descartaba como eco: pasó probándolo.
     function esEco(texto, dichos) {
         const palabras = (t) => String(t || '').toLowerCase()
             .normalize('NFD').replace(/[̀-ͯ]/g, '')
-            .split(/[^a-z0-9ñ]+/).filter(p => p.length >= 3);
-        const oidas = palabras(texto);
-        if (oidas.length < 2) return false;
-        const dichas = new Set(dichos.flatMap(palabras));
-        if (!dichas.size) return false;
-        const coinciden = oidas.filter(p => dichas.has(p)).length;
-        return coinciden / oidas.length >= 0.6;
+            .split(/[^a-z0-9ñ]+/).filter(Boolean);
+        const pares = (ps) => ps.slice(1).map((p, i) => ps[i] + ' ' + p);
+        const oidos = pares(palabras(texto));
+        if (oidos.length < 2) return false;   // menos de tres palabras: no alcanza para decidir
+        const dichos2 = new Set(dichos.flatMap(d => pares(palabras(d))));
+        if (!dichos2.size) return false;
+        const coinciden = oidos.filter(p => dichos2.has(p)).length;
+        return coinciden / oidos.length >= 0.6;
     }
 
     return { aplicarCopia, proyectar, rechazar, indicesTocados, armarResumen, tocaHablar, esEco };
@@ -342,6 +349,9 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
         const pedidos = colaPedidos.splice(0);
         pensando = true;
         await aplicaciones;
+        // Que lo último que se aplicó ya esté guardado: si pide "volvé al
+        // cambio anterior", ese cambio tiene que estar en el historial.
+        await Estado.flushSave();
         const tarjeta = Orbe.nuevaTarjeta(pedidos);
         let recibioOps = false;
         let respuestaParcial = '';
@@ -359,6 +369,7 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
         try {
             const final = await API.streamVozTurno({
                 instrucciones: pedidos,
+                presupuesto: Estado.actual()?.id,
                 items: L.proyectar(Estado.lista(), pendientes),
                 encabezado: cfg.leerEncabezado(),
                 historial,
@@ -449,7 +460,7 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
         const { altas, cambios, bajas } = L.indicesTocados(ops, antes.length);
 
         await Promise.all(bajas.map(i => Items.animarBaja(i)));
-        Estado.aplicarYGuardar(ops);
+        Estado.aplicarYGuardar(ops, 'voz');
         altas.forEach((i, k) => setTimeout(() => Items.animarAlta(i), k * 180));
         cambios.forEach(({ idx, campos }) => Items.animarCambio(idx, campos));
         if (Object.keys(encabezado).length) {
@@ -477,7 +488,11 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
             paraDecir.push('Listo, lo deshice.');
             historial.push({ rol: 'asistente', texto: '(Se deshizo el último cambio.)' });
         } else {
-            paraDecir.push('No hay nada para deshacer.');
+            // En esta sesión no hay nada guardado para deshacer (por ejemplo,
+            // recargó la página). El historial del servidor sí lo tiene: se le
+            // pide a Claude que revierta el último cambio con eso.
+            colaPedidos.push('Deshacé el último cambio que se hizo en el presupuesto.');
+            procesarCola();
         }
         Orbe.permitirDeshacer(Estado.puedeDeshacer());
     }
