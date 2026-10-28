@@ -5,3 +5,11 @@ data/
 
 __pycache__/
 *.py[cod]
+
+# Datos personales / de infraestructura que no van al repositorio público
+public/js/emisor.local.js
+deploy.local.env
+
+# Salidas de prueba
+output/
+tmp/

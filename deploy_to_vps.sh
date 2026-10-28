@@ -14,9 +14,14 @@
 
 set -euo pipefail
 
-VPS_IP="203.0.113.10"
-VPS_USER="root"
-VPS_PATH="/var/www/presupuestos"
+# Datos del servidor: van en deploy.local.env (no se sube al repositorio).
+#   VPS_IP=1.2.3.4
+#   VPS_USER=root
+#   VPS_PATH=/var/www/presupuestos
+[ -f deploy.local.env ] && . ./deploy.local.env
+: "${VPS_IP:?Falta VPS_IP: crealo en deploy.local.env (ver el comentario arriba)}"
+VPS_USER="${VPS_USER:-root}"
+VPS_PATH="${VPS_PATH:-/var/www/presupuestos}"
 
 echo "━━ Presupuestos · Deploy a ${VPS_IP} ━━"
 
@@ -43,6 +48,7 @@ tar czf - \
     --exclude='.env' \
     --exclude='*.log' \
     --exclude='deploy_to_vps.sh' \
+    --exclude='deploy.local.env' \
     -C . . | \
 ssh "${VPS_USER}@${VPS_IP}" "mkdir -p ${VPS_PATH} && tar xzf - -C ${VPS_PATH} && echo '  ✓ Archivos copiados'"
 

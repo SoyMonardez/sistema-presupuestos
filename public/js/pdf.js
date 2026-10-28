@@ -1,20 +1,24 @@
 // Export a PDF — dos formatos: "original" (Etan Construcción, color) y "municipal" (blanco y negro, formal).
-// Datos del emisor — editá estos valores si cambian:
-const PDF_EMISOR = {
-    nombre: 'ETAN CONSTRUCCIÓN',
+// Datos del emisor: los que salen en el encabezado y la firma del PDF.
+//
+// Los reales (nombre legal, CUIT, dirección, teléfono) viven en
+// js/emisor.local.js, que NO se sube al repositorio: ver js/emisor.example.js.
+// Si ese archivo no está, el PDF sale con estos datos de ejemplo.
+const PDF_EMISOR = Object.assign({
+    nombre: 'MI EMPRESA CONSTRUCTORA',
     subtitulo: 'Cómputo y Presupuesto Oficial de Mano de Obra',
     telefono: '+54 9 000 000-0000',
     telefonoCorto: '000 0000000',
-    origen: 'San Juan, Argentina',
-    ciudad: 'San Juan, Capital',
-    firma: 'Etan Construcción',
+    origen: 'Ciudad, Argentina',
+    ciudad: 'Ciudad',
+    firma: 'Mi Empresa Constructora',
     // Datos legales para el formato municipal (cabecera formal):
-    nombreLegal: 'NOMBRE APELLIDO LEGAL',
+    nombreLegal: 'APELLIDO NOMBRE',
     cuit: '00-00000000-0',
-    direccion: 'Calle Ejemplo 123, Ciudad Demo',
+    direccion: 'Calle 123, Ciudad',
     telefonoMunicipal: '000 000 0000',
     email: '',
-};
+}, (typeof window !== 'undefined' && window.PDF_EMISOR_LOCAL) || {});
 
 // Paleta del documento original
 const NAVY       = [23, 55, 94];     // títulos, encabezado de tabla

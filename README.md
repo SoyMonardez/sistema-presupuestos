@@ -1,32 +1,116 @@
-# Sistema de Presupuestos
+# Sistema de Presupuestos de Obra con asistente de voz
 
-App para armar presupuestos de obra por items (nombre, cantidad, unidad, precio unitario), pensada para usarse desde el celular en la obra. Dicta por voz, lee la hoja de cambios que devuelve el municipio, convierte unidades sin sacar cuentas a mano, y exporta el PDF.
+> **PWA full-stack para armar presupuestos de construcción desde el celular, hablándole a un asistente de IA.**
+> Node.js · Express · SQLite · JavaScript vanilla · Claude · Groq · ElevenLabs · Docker
 
-- **Backend:** Node.js + Express + SQLite (`better-sqlite3`)
-- **Frontend:** HTML/CSS/JS vanilla, mobile-first, sin build
-- **IA:** Groq y Claude, ruteados por tarea (ver abajo). Entiende jerga argentina ("15 lucas el metro")
-- **Voz:** grabación en el navegador → Whisper por servidor (funciona en cualquier navegador; necesita HTTPS o localhost para poder usar el micrófono)
-- **Imágenes:** Pillow para achicar las fotos antes de mandarlas al modelo de visión
-- **PDF:** jsPDF client-side, con formato para cliente particular y para municipio
-- **Auth:** una password por acceso (`APP_PASSWORD`, más `APP_PASSWORD_<NOMBRE>` para accesos extra) + token firmado. Cada acceso tiene su propia base de datos
+*English summary: a mobile-first PWA that lets a construction contractor build itemized quotes by voice. A real-time conversational assistant (speech-to-text → intent splitting → LLM → text-to-speech) edits the quote while you talk, with animated feedback, undo backed by a per-item version history, unit conversion done with exact server-side math, and PDF export. Built end-to-end — backend, frontend, AI pipeline, tests and deployment — by one developer.*
 
-## Correr local
+![Modo conversación en el celular](docs/img/conversacion-celular.png)
 
-```bash
-cp .env.example .env   # completar APP_PASSWORD, APP_SECRET y al menos una API key
-docker compose -f docker-compose.local.yml up --build
-# → http://localhost:3002
+---
+
+## Por qué existe
+
+Mi papá es contratista de obra. Armaba los presupuestos a mano: anotaba en la obra, después pasaba todo a una planilla, sacaba cuentas de m² a m³ con la calculadora y armaba el PDF. Esta app reemplaza todo eso por **hablarle al teléfono**:
+
+> *"Agregá un item de demolición, uno, metro cuadrado, a 320 mil pesos."*
+
+El asistente lo entiende, muestra lo que va a hacer, lo carga con una animación y contesta en voz alta: *"Listo, agregué la demolición. ¿Con qué seguimos?"*. Se le puede dictar una planilla entera de corrido, corregir precios, poner el título y el cliente, deshacer cambios y exportar el PDF para el cliente o el municipio.
+
+Está en producción, desplegada en un VPS propio con HTTPS.
+
+## Lo que muestra este proyecto
+
+| Área | Qué hay |
+|---|---|
+| **IA aplicada de verdad** | Pipeline de voz en tiempo real con **tres modelos** coordinados (voz a texto, un "cortador" rápido que separa pedidos, Claude que decide y una voz que responde). Ruteo de tareas entre proveedores según costo y riesgo. Streaming SSE. |
+| **Criterio con la IA** | La IA **propone, el servidor valida y calcula**: nunca hace cuentas de plata ni escribe en la base directo. Defensas contra alucinaciones de Whisper, eco del parlante y precios inventados. |
+| **Backend** | API REST con Express, SQLite con migraciones, autenticación con tokens HMAC propios, **una base de datos por acceso** (multi-tenant liviano), historial de versiones por item, CSP con hashes calculados al arrancar, rate limiting del login. |
+| **Frontend sin frameworks** | JavaScript vanilla en módulos, sin build. Animaciones en canvas, Web Audio (AudioWorklet para capturar el micrófono a 16 kHz, compresor y limitador para la voz), PWA instalable con service worker. Mobile-first y vista de escritorio. |
+| **Calidad** | Más de 180 pruebas automatizadas (`npm test`), decisiones documentadas en el propio código, bugs encontrados probando y corregidos con su prueba. |
+| **Operación** | Docker, deploy por script a un VPS detrás de Nginx Proxy Manager con HTTPS, sin pisar la configuración del servidor. |
+
+## Capturas
+
+| Celular | Orbe flotante | Escritorio |
+|---|---|---|
+| ![Editor en el celular](docs/img/editor-celular.png) | ![Orbe flotante](docs/img/orbe-flotante.png) | ![Vista de escritorio](docs/img/escritorio.png) |
+
+## Funcionalidades
+
+**Modo conversación por voz** ([cómo funciona por dentro](docs/MODO-VOZ.md))
+- Escucha en vivo y entiende cada pedido mientras se sigue hablando; se le puede leer una planilla de corrido.
+- Muestra lo que pensó hacer antes de aplicarlo. Con **Auto** lo aplica solo; sin Auto espera un "sí".
+- Carga items aunque falten datos (cantidad 1, la unidad lógica, el precio del tarifario o $0) y avisa qué quedó sin precio.
+- Entiende "volvé al cambio anterior", "dejá el contrapiso con el precio que tenía" o "recuperá el item que borré", gracias a un **historial de versiones por item** guardado en la base.
+- Orbe animado que cambia de color y movimiento según la fase (escucha, piensa, carga, habla); se achica a un orbe flotante y arrastrable.
+- En el celular suena por el altavoz y más fuerte (ver [las limitaciones de audio del navegador y cómo se resolvieron](docs/MODO-VOZ.md#el-altavoz-del-celular)).
+
+**Presupuesto**
+- Items con cantidad, unidad de un catálogo y precio unitario; total en números y en letras.
+- **Conversión de unidades exacta** (m² → m³ con el espesor, etc.) que preserva el total del item; la cuenta la hace el servidor, no la IA.
+- Lectura de la **hoja de cambios del municipio** por foto: la compara contra el presupuesto y propone las conversiones.
+- Importar items desde PDF, Excel, CSV o foto.
+- **Tarifario propio** que la IA usa con prioridad sobre cualquier estimación.
+- Exportación a **PDF** en dos formatos: cliente particular y municipal.
+
+**Asistente de chat**
+- Tres modos: asistente, investigador (busca precios actuales en internet con fuentes) y presupuestador (edita el presupuesto).
+- Simula descuentos y redondeos sin aplicarlos, con las cuentas hechas por el servidor.
+
+## Stack
+
+| Capa | Tecnología |
+|---|---|
+| Backend | Node.js 20, Express 4, SQLite (`better-sqlite3`), Python para leer PDF/Excel y achicar fotos |
+| Frontend | HTML, CSS y JavaScript vanilla (sin build), Web Audio API, Canvas, jsPDF, Service Worker |
+| IA | **Claude** (decisiones, visión, chat), **Groq** (Whisper, cortador rápido, sugerencias), **ElevenLabs** (voz y escucha en vivo) |
+| Infra | Docker, Nginx Proxy Manager, VPS (Hostinger), HTTPS |
+
+## Arquitectura en una imagen
+
+```mermaid
+flowchart LR
+    subgraph Navegador["Navegador (PWA)"]
+        UI[Editor + orbe de voz]
+        MIC[AudioWorklet<br/>PCM 16 kHz]
+    end
+    subgraph Servidor["Servidor Node/Express"]
+        API[API REST + SSE]
+        VAL[Validación de ops<br/>y cuentas exactas]
+        DB[(SQLite<br/>una base por acceso)]
+        HIST[Historial de<br/>versiones]
+    end
+    MIC -->|voz en vivo| EL[ElevenLabs Scribe]
+    EL -->|texto| UI
+    UI -->|pedidos| API
+    API --> G[Groq<br/>cortador / Whisper]
+    API --> C[Claude<br/>decide los cambios]
+    C --> VAL --> UI
+    API --> TTS[ElevenLabs<br/>voz]
+    TTS --> UI
+    API --- DB
+    DB --- HIST
 ```
 
-`docker-compose.yml` (el de producción) declara la red externa `nginx_network`, que solo existe en el VPS. Por eso en la compu se usa `docker-compose.local.yml`, que además tiene su propio volumen: lo que pruebes acá no se mezcla con nada.
+El detalle de cada pieza, las decisiones y sus contras están en [docs/ARQUITECTURA.md](docs/ARQUITECTURA.md).
 
-Para empezar de cero: `docker compose -f docker-compose.local.yml down -v`
+## Probarlo en local
 
-Sin Docker:
+Requisitos: Node.js 20+ (o Docker) y al menos una clave de IA (Groq tiene capa gratuita).
 
 ```bash
+git clone https://github.com/SoyMonardez/sistema-presupuestos.git
+cd sistema-presupuestos
+cp .env.example .env        # completar APP_PASSWORD, APP_SECRET y una API key
 npm install
-npm run dev
+npm run dev                 # → http://localhost:3002
+```
+
+Con Docker:
+
+```bash
+docker compose -f docker-compose.local.yml up --build
 ```
 
 Generar `APP_SECRET`:
@@ -35,80 +119,58 @@ Generar `APP_SECRET`:
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-> **Al probar en el celular**, desregistrá el service worker o hacé hard-reload. Si el `CACHE` de `public/sw.js` no subió de versión vas a estar mirando archivos viejos y volviéndote loco.
+El micrófono necesita HTTPS o `localhost`. Para los datos que salen en el PDF, copiar `public/js/emisor.example.js` como `public/js/emisor.local.js`.
 
-## Qué hace la IA
+### Variables de entorno
 
-**Alcanza con una sola API key para que arranque.** Si falta la del proveedor que le toca a una tarea, se usa el otro y queda avisado en el log de arranque.
+| Variable | Para qué |
+|---|---|
+| `APP_PASSWORD` | Contraseña del acceso principal |
+| `APP_PASSWORD_<NOMBRE>` | Accesos extra, cada uno con su propia base de datos |
+| `APP_SECRET` | Firma de los tokens de sesión |
+| `ANTHROPIC_API_KEY` | Claude: decisiones, chat, visión |
+| `GROQ_API_KEY` | Groq: Whisper, cortador, sugerencias |
+| `ELEVENLABS_API_KEY` | Voz del asistente y escucha en vivo (opcional: sin ella usa la voz del dispositivo y Whisper) |
+| `AI_ROUTE_<TAREA>` | Mover una tarea de proveedor sin tocar código |
 
-| Tarea | Proveedor por defecto | Por qué |
-|---|---|---|
-| `suggest`, `spellcheck`, `parse`, `client_data` | Groq | Latencia crítica o trabajo mecánico |
-| `command`, `chat`, `vision` | Claude | Equivocarse acá sale caro: es un presupuesto frente a un cliente |
-| Transcripción de voz | Groq (Whisper) | Anda muy bien y sale centavos |
-| Búsqueda web | Groq (`compound-mini`) | Trae la búsqueda integrada |
+La lista completa con valores por defecto está en [`.env.example`](.env.example). Alcanza con **una** clave de IA para arrancar: si falta la del proveedor de una tarea, se usa el otro.
 
-Se puede mover cualquier tarea de proveedor sin tocar código, con las variables `AI_ROUTE_*` del `.env`.
-
-### Lo que se puede pedir
-
-- **Dictar items** — botón de micrófono, hablás ("20 metros cuadrados de cerámica a 15 lucas el metro y un día de mano de obra 80 mil") y la IA arma los items. Los revisás y confirmás.
-- **Escribir** — lo mismo pero tipeando, y además edita lo que ya está cargado: "sacá el item 5", "el item 2 ahora sale 300 mil", "pasá todo a metros cúbicos".
-- **La hoja de cambios** — foto de la propuesta que devuelve el municipio. La compara contra el presupuesto y te dice qué piden cambiar, sacando de la hoja la medida que hace falta para convertir. Lo que no matchea lo reporta en vez de adivinar.
-- **Importar** — items desde PDF, Excel, CSV o una foto.
-- **Sugerencias** — al escribir el nombre de un item propone el nombre completo, la unidad típica y un precio estimado.
-- **El asistente** (pestaña del editor) — conoce los items, tu tarifario y lo que cobraste antes por trabajos parecidos. Simula descuentos sin aplicarlos, convierte, y busca precios de mercado citando la fuente.
-
-### Las dos reglas que no se rompen
-
-1. **La IA no calcula plata.** Extrae datos y dice qué hacer; la aritmética (conversiones, descuentos, totales) la hace el servidor, exacta. Un modelo haciendo cuentas de precisión en un solo paso se equivoca, y acá eso se factura.
-2. **La IA no escribe en la base.** Propone, y los cambios se muestran para confirmar antes de aplicarse.
-
-## Unidades
-
-Las unidades salen de un catálogo (`m`, `m²`, `m³`, `un.`, `kg`, `tn`, `lt`, `hs`, `día`, `saco`, `global`) y se eligen de una lista, no se tipean: si conviven "m2", "M²" y "metros cuadrados" ninguna conversión es confiable. Se pueden agregar unidades propias desde **Precios base**.
-
-**Convertir preserva el total del item**: se recalculan cantidad y precio unitario para que el trabajo siga costando lo mismo, expresado de otra forma. Lo que cambia para el cliente es la presentación, no la plata.
-
-Para pasar de m² a m³ alcanza con el espesor — que es justo el número que viene en la hoja del municipio. Entre familias incompatibles (horas a m², kg a m³) la conversión se rechaza en vez de inventar un factor.
-
-## Precios base
-
-Tu tarifario real. La IA lo usa con prioridad absoluta: si un item coincide usa ese precio exacto, si es derivado extrapola desde ahí, y solo estima de mercado cuando no hay ninguna relación.
-
-## Deploy en el VPS (Hostinger)
-
-**`/var/www/presupuestos` en el VPS no es un checkout de git**, es una copia de archivos. Se despliega desde la máquina de desarrollo:
+## Pruebas
 
 ```bash
-bash deploy_to_vps.sh
+npm test
 ```
 
-Empaqueta el proyecto con tar (excluyendo `node_modules`, `.git` y `data`), lo sube por SSH y levanta el container. El `.env` del servidor no se pisa.
+Cubren lo que, si falla, corrompe un presupuesto sin que se note: validación de operaciones de la IA, conversiones, el historial de versiones, la lógica de la conversación (pendientes, deshacer, eco), los atajos de voz, el filtro de alucinaciones de Whisper, la lectura de montos en voz alta y la separación de datos entre accesos.
 
-La primera vez, en **Nginx Proxy Manager**:
+## Estructura
 
-1. Proxy Hosts → Add Proxy Host
-2. Domain: `presupuestos.tudominio.com` (crear el registro A en DNS antes)
-3. Forward Hostname: `presupuestos-app` — Forward Port: `3002`
-4. SSL → Request a new certificate (Let's Encrypt) + Force SSL
-
-> El micrófono **requiere HTTPS**, así que no te saltees el certificado.
-
-La base vive en el volumen `presupuestos_data` y sobrevive los rebuilds.
-
-## Personalizar el PDF
-
-Editar el bloque `PDF_EMISOR` al inicio de [public/js/pdf.js](public/js/pdf.js) con nombre, rubro, teléfono y email que salen en el encabezado.
+```
+server/
+  index.js            Express, seguridad (CSP, headers), rutas
+  auth.js             tokens HMAC y accesos con base propia
+  db.js               SQLite y migraciones
+  routes/             budgets, ai, chat, voz, units, prices, import, settings
+  ai/                 proveedores (Claude, Groq), ElevenLabs, ruteo por tarea
+  lib/                validación de ops, conversiones, historial, cortador, vocabulario
+public/
+  js/                 módulos del frontend (estado, items, chat, voz, orbe, PDF…)
+  css/app.css         estilos mobile-first + escritorio
+docs/                 arquitectura, API, modo voz, deploy
+```
 
 ## Documentación
 
-- [docs/plan-v2.md](docs/plan-v2.md) — el plan de la versión actual: qué problema resuelve cada fase y por qué se decidió así.
+- [Arquitectura y decisiones](docs/ARQUITECTURA.md)
+- [Modo conversación por voz](docs/MODO-VOZ.md)
+- [Referencia de la API](docs/API.md)
+- [Deploy y operación](docs/DEPLOY.md)
+- [Plan de la versión 2](docs/plan-v2.md)
 
-## Roadmap
+## Autor
 
-- Chat global (desde la lista) para estimar un trabajo nuevo desde cero
-- Usuarios reales (registro/login) en vez de password única
-- Multi-tenant + planes
-- Plantillas de presupuesto por rubro
-- Estados (enviado / aprobado / rechazado) y envío por WhatsApp/email
+**Alejo Monardez** — desarrollador full-stack.
+Diseñé y construí todo el proyecto: producto, backend, frontend, integración de IA, pruebas y despliegue.
+
+- Portfolio: [alejomonardez.com](https://alejomonardez.com)
+- GitHub: [@SoyMonardez](https://github.com/SoyMonardez)
