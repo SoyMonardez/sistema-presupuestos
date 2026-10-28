@@ -413,18 +413,56 @@ const Hablar = (() => {
 
     // El orbe de la conversación se mueve con el volumen de la voz. Solo se
     // puede medir el MP3 (pasa por Web Audio); la voz del aparato no se deja.
+    // Más fuerte que el máximo del reproductor. Un <audio> no pasa de volumen
+    // 1, y en el celular, con el ruido de una obra, la voz quedaba baja. Se la
+    // pasa por un compresor (levanta las partes bajas de la voz) y una ganancia,
+    // con un limitador al final para que lo que se gana no salga distorsionado.
+    // Medido con respuestas reales de ElevenLabs: toda la cadena suma ~11 dB de
+    // volumen promedio (al oído, cerca del doble) sin recortar ninguna muestra.
+    const REFUERZO = 2.4;
+
+    /** Arma la cadena de volumen. Devuelve el último nodo, para conectarlo a la salida. */
+    function armarRefuerzo(ctx, fuente) {
+        const compresor = ctx.createDynamicsCompressor();
+        compresor.threshold.value = -26;
+        compresor.knee.value = 10;
+        compresor.ratio.value = 4;
+        compresor.attack.value = 0.003;
+        compresor.release.value = 0.2;
+
+        const ganancia = ctx.createGain();
+        ganancia.gain.value = REFUERZO;
+
+        // Limitador: nada pasa de casi el máximo, así no "rompe" el parlante.
+        // El umbral va bajo (-6) porque el navegador le suma ganancia propia a
+        // cada compresor: medido, con -2 el pico pasaba de 0 dB y recortaba.
+        const limitador = ctx.createDynamicsCompressor();
+        limitador.threshold.value = -6;
+        limitador.knee.value = 0;
+        limitador.ratio.value = 20;
+        limitador.attack.value = 0.001;
+        limitador.release.value = 0.05;
+
+        // Techo con margen, por si una frase pica más que la que se midió.
+        const techo = ctx.createGain();
+        techo.gain.value = 0.92;
+
+        fuente.connect(compresor).connect(ganancia).connect(limitador).connect(techo);
+        return techo;
+    }
+
+    // Antes esto se salteaba en el celular por miedo al "modo llamada" (salida
+    // por el parlante de la oreja). Ahora el micrófono se suelta mientras habla
+    // (ver Escucha.pausarMic), así que el audio puede pasar por Web Audio y
+    // reforzarse también ahí.
     function conectarMedidor(audio) {
-        // En el celular el audio va directo al parlante, sin pasar por Web
-        // Audio: en algunos teléfonos esa salida queda atada al "modo llamada"
-        // (parlante de la oreja, bajito). El orbe simula la onda al hablar.
-        if (window.matchMedia?.('(pointer: coarse)').matches) return null;
         const ctx = typeof Sonidos !== 'undefined' ? Sonidos.contexto() : null;
         if (!ctx) return null;
         try {
             const fuente = ctx.createMediaElementSource(audio);
             const analizador = ctx.createAnalyser();
             analizador.fftSize = 512;
-            fuente.connect(analizador);
+            armarRefuerzo(ctx, fuente).connect(analizador);
             analizador.connect(ctx.destination);
             return analizador;
         } catch {
@@ -573,7 +611,7 @@ const Hablar = (() => {
         soportado, disponible, vozActual, paraLeer, destrabar,
         decir, callar, pausar, reanudar, alternarPausa,
         estaHablando, estaPausado, leyendoId, alHablar,
-        encolar, nivel,
+        encolar, nivel, armarRefuerzo,
     };
 })();
 
