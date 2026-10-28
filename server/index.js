@@ -14,6 +14,7 @@ import settingsRouter from './routes/settings.js';
 import vozRouter from './routes/voz.js';
 import { routingSummary } from './ai/provider.js';
 import { buildCsp } from './csp.js';
+import { crearLimiteIA } from './lib/limite-ia.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3002;
@@ -102,13 +103,19 @@ app.post('/api/login', (req, res) => {
 });
 
 // ---------- API protegida ----------
+// Todo lo que llama a Claude, Groq o ElevenLabs pasa por el límite de uso (ver
+// lib/limite-ia.js): sin él, con un token robado se gastaban los créditos.
+const limiteIA = crearLimiteIA().middleware;
+
 app.use('/api/budgets', authMiddleware, budgetsRouter);
 app.use('/api/prices', authMiddleware, pricesRouter);
 app.use('/api/units', authMiddleware, unitsRouter);
 app.use('/api/settings', authMiddleware, settingsRouter);
-app.use('/api/ai', authMiddleware, aiRouter);
-app.use('/api/import', authMiddleware, importRouter);
-app.use('/api/voz', authMiddleware, vozRouter);
+app.use('/api/ai', authMiddleware, limiteIA, aiRouter);
+app.use('/api/import', authMiddleware, limiteIA, importRouter);
+app.use('/api/voz', authMiddleware, limiteIA, vozRouter);
+// Del chat solo gastan los mensajes nuevos; listar o borrar conversaciones no.
+app.post(['/api/chats/:id/messages', '/api/chats/:id/messages/stream'], authMiddleware, limiteIA);
 // El chat cuelga de /api porque tiene rutas de los dos lados: las conversaciones
 // de un presupuesto (/api/budgets/:id/chats) y los mensajes (/api/chats/:id/...).
 //
