@@ -20,6 +20,7 @@ const Burbuja = (() => {
     let canvas = null, g2d = null, video = null, reloj = null;
     let activa = false;
     let alPausar = () => {};
+    let error = '';
 
     function soportada() {
         return Boolean(document.pictureInPictureEnabled
@@ -90,6 +91,7 @@ const Burbuja = (() => {
     }
 
     async function abrirYa(onPausa) {
+        error = '';
         if (onPausa) alPausar = onPausa;
         preparar();
         pintarCuadro();
@@ -105,6 +107,8 @@ const Burbuja = (() => {
             return true;
         } catch (err) {
             console.warn('[burbuja] no se pudo abrir', err);
+            // Se muestra en el aviso: desde el celular es la única forma de saber por qué.
+            error = [err?.name, err?.message].filter(Boolean).join(': ').slice(0, 120);
             cerrar();
             return false;
         }
@@ -121,5 +125,5 @@ const Burbuja = (() => {
         if (estaba) alPausar(false);
     }
 
-    return { soportada, abrir, cerrar, activa: () => activa };
+    return { soportada, abrir, cerrar, activa: () => activa, ultimoError: () => error };
 })();

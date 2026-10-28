@@ -488,10 +488,6 @@
         <!-- Deslizar la manija (celular) o tocar el botón deja solo el orbe flotando -->
         <div class="voz-cabeza" id="voz-cabeza">
             <span class="voz-grip" aria-hidden="true"></span>
-            <!-- El orbe flotando encima de otras apps (ver burbuja.js). Solo aparece si el navegador lo permite. -->
-            <button id="voz-burbuja" class="voz-mini-btn voz-burbuja-btn" type="button" title="Dejar el orbe flotando sobre otras apps" aria-label="Dejar el orbe flotando sobre otras apps" hidden>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><rect x="2" y="4" width="20" height="16" rx="2"/><rect x="12" y="11" width="7" height="6" rx="1"/></svg>
-            </button>
             <button id="voz-minimizar" class="voz-mini-btn" type="button" title="Dejar solo el orbe flotando" aria-label="Dejar solo el orbe flotando">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l7-7"/><path d="M3 21l7-7"/></svg>
             </button>
@@ -515,6 +511,13 @@
             <span class="voz-auto-track" aria-hidden="true"><span class="voz-auto-thumb"></span></span>
             <span>Auto: aplicar sin preguntar</span>
         </label>
+        <!-- El orbe flotando encima de otras apps (ver burbuja.js). Con texto y a la
+             vista: el navegador no deja abrirlo solo al salir, hay que tocarlo antes.
+             Solo aparece si el navegador lo permite. -->
+        <button id="voz-burbuja" class="voz-flotar" type="button" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"/><rect x="12" y="11" width="7" height="6" rx="1"/></svg>
+            <span>Flotar para leer desde otra app</span>
+        </button>
     </div>
     <!-- El orbe solo, flotando. Se arrastra a donde quieras; tocarlo abre el panel. -->
     <button id="voz-flotante" class="voz-flotante" type="button" title="Abrir la conversación (arrastrá para moverlo)" aria-label="Abrir la conversación" hidden></button>
@@ -548,8 +551,8 @@
 <script src="js/sonidos.js?v=25"></script>
 <script src="js/escucha.js?v=34"></script>
 <script src="js/orbe.js?v=35"></script>
-<script src="js/burbuja.js?v=35"></script>
-<script src="js/conversacion.js?v=35"></script>
+<script src="js/burbuja.js?v=36"></script>
+<script src="js/conversacion.js?v=36"></script>
 <script src="js/app.js?v=30"></script>
 <script>
 if ('serviceWorker' in navigator) {

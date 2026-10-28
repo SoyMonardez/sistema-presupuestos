@@ -218,17 +218,42 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
         $('#btn-conversar').addEventListener('click', () => (activo ? salir() : entrar()));
         const btnBurbuja = $('#voz-burbuja');
         btnBurbuja.hidden = !Burbuja.soportada();
-        btnBurbuja.addEventListener('click', async () => {
-            const ok = await Burbuja.abrir({
-                onPausa: (si) => {
-                    enPausa = si;
-                    if (si) Hablar.callar();
-                    Orbe.subtitulo(si ? 'En pausa' : '');
-                },
-            });
-            if (!ok) toast('No pude dejar el orbe flotando en este navegador', true);
-        });
+        btnBurbuja.addEventListener('click', () => abrirBurbuja());
         document.addEventListener('keydown', (e) => { if (activo && e.key === 'Escape') salir(); });
+        document.addEventListener('visibilitychange', alCambiarVisibilidad);
+    }
+
+    // ---------- La burbuja: seguir escuchando desde otra app ----------
+    async function abrirBurbuja() {
+        const ok = await Burbuja.abrir({
+            onPausa: (si) => {
+                enPausa = si;
+                if (si) Hablar.callar();
+                Orbe.subtitulo(si ? 'En pausa' : '');
+            },
+        });
+        if (!ok) toast(`No pude dejar el orbe flotando (${Burbuja.ultimoError() || 'el navegador no lo permite'})`, true);
+    }
+
+    // Probándolo, salió de la app sin tocar "Flotar" y esperaba que el orbe
+    // apareciera solo, como en ChatGPT. El navegador no deja abrir la burbuja
+    // sin un toque, y sin ella Android frena la página al salir: no escucha
+    // más. Así que al volver se le explica qué pasó y qué tocar.
+    let seFueSinBurbuja = false;
+    function alCambiarVisibilidad() {
+        if (!activo) return;
+        if (document.hidden) {
+            seFueSinBurbuja = !Burbuja.activa();
+            return;
+        }
+        if (!seFueSinBurbuja) return;
+        seFueSinBurbuja = false;
+        const aviso = Burbuja.soportada()
+            ? 'Mientras estabas en otra app no te escuchaba. Para leer desde otra app, tocá «Flotar» antes de salir.'
+            : 'Mientras estabas en otra app no te escuchaba: este navegador no deja seguir escuchando desde afuera.';
+        toast(aviso);
+        Orbe.subtitulo(aviso);
+        if (Orbe.estaMini()) Orbe.expandir();
     }
 
     // ---------- Entrar y salir ----------
@@ -246,6 +271,10 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
         Orbe.permitirDeshacer(Estado.puedeDeshacer());
         $('#btn-conversar').classList.add('activo');
         Sonidos.entrar();
+        // Donde Chrome lo permite (por ahora en la PC, en páginas que usan el
+        // micrófono), la burbuja se abre sola al cambiar de pestaña o de app.
+        // Donde no, esto no hace nada y queda el botón.
+        try { navigator.mediaSession?.setActionHandler('enterpictureinpicture', () => abrirBurbuja()); } catch {}
 
         const ok = await Escucha.iniciar({
             presupuesto: Estado.actual()?.id,
@@ -276,6 +305,8 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
         Escucha.detener();
         Hablar.callar();
         Burbuja.cerrar();
+        try { navigator.mediaSession?.setActionHandler('enterpictureinpicture', null); } catch {}
+        seFueSinBurbuja = false;
         enPausa = false;
         Orbe.cerrar();
         $('#btn-conversar').classList.remove('activo');

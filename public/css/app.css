@@ -2369,9 +2369,27 @@ body.voz-activa .totalbar { visibility: hidden; }
     -webkit-tap-highlight-color: transparent;
 }
 .voz-mini-btn:active { transform: translateY(-50%) scale(.94); }
-/* El de la burbuja va del otro lado de la manija. */
-.voz-burbuja-btn { right: auto; left: -4px; }
-.voz-mini-btn[hidden] { display: none; }
+/* Dejar el orbe flotando sobre otras apps (ver burbuja.js). */
+.voz-flotar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    margin-top: 10px;
+    padding: 11px 14px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--voz-a, #38bdf8) 55%, var(--border));
+    background: color-mix(in srgb, var(--voz-a, #38bdf8) 14%, var(--surface-2));
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+.voz-flotar:active { transform: scale(.98); }
+.voz-flotar[hidden] { display: none; }
 /* El video de la burbuja tiene que estar en la página pero no se ve. */
 .burbuja-video {
     position: fixed;
