@@ -38,9 +38,15 @@ const Voice = (() => {
     const MS_ENTRE_PARCIALES = 2500;  // cada cuánto se pide una transcripción parcial
     const TOPE_SEGUNDOS   = 120;    // tope por dictado
 
-    // Umbral de "hay voz". Es volumen medio (RMS) sobre 0..1; el ruido de una
-    // habitación queda bien por debajo y una voz normal bien por encima.
-    const UMBRAL_VOZ = 0.012;
+    // Umbral mínimo de "hay voz". Es volumen medio (RMS) sobre 0..1, medido
+    // después del filtro de voz; el ruido de una habitación queda bien por
+    // debajo y una voz normal bien por encima. Con ruido de fondo el umbral
+    // sube solo (ver ruido-de-fondo.js).
+    const UMBRAL_VOZ = 0.01;
+    // Banda donde está la voz. Fuera de ella queda casi todo el ruido de un
+    // gimnasio: el bombo y el bajo de la música, el golpe de las pesas.
+    const VOZ_DESDE_HZ = 200;
+    const VOZ_HASTA_HZ = 4000;
 
     function isSupported() {
         return Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
@@ -63,7 +69,11 @@ const Voice = (() => {
     async function start({ onTick, onStop, onError, onParcial, onSilencio, silencioMs = 0 }) {
         if (active) return;
         try {
-            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            // La supresión de ruido del navegador limpia la grabación antes de
+            // que llegue a Whisper. Varios la traen prendida, pero no todos.
+            stream = await navigator.mediaDevices.getUserMedia({
+                audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+            });
         } catch (err) {
             onError?.(err.name === 'NotAllowedError' || err.name === 'SecurityError'
                 ? 'Permití el acceso al micrófono (candado en la barra de direcciones).'
@@ -123,14 +133,17 @@ const Voice = (() => {
      *    terminado apenas arranca, cuando todavía no dijo nada.
      *  - Cualquier sonido reinicia la cuenta: las pausas al pensar en medio de
      *    una frase no tienen que cortar el dictado.
+     *  - "Sonido" es voz por encima del ruido del lugar, no cualquier volumen:
+     *    con música de fondo el volumen nunca baja y no cortaría nunca.
      */
     function crearDetectorDeSilencio({ umbral = UMBRAL_VOZ, silencioMs }) {
+        const ruido = RuidoDeFondo.crear({ minimo: umbral });
         let huboVoz = false;
         let calladoDesde = 0;
         return {
             /** @returns {boolean} true cuando hay que cortar */
             medir(volumen, ahora) {
-                if (volumen > umbral) { huboVoz = true; calladoDesde = 0; return false; }
+                if (ruido.esVoz(volumen, ahora)) { huboVoz = true; calladoDesde = 0; return false; }
                 if (!huboVoz) return false;
                 if (!calladoDesde) { calladoDesde = ahora; return false; }
                 return ahora - calladoDesde >= silencioMs;
@@ -152,9 +165,17 @@ const Voice = (() => {
             // acá siempre venimos de un toque, pero resume() no cuesta nada.
             audioCtx.resume?.().catch(() => {});
             const fuente = audioCtx.createMediaStreamSource(stream);
+            // El volumen se mide solo en la banda de la voz (la grabación
+            // sigue entera: esto es nada más para decidir cuándo se calló).
+            const graves = audioCtx.createBiquadFilter();
+            graves.type = 'highpass';
+            graves.frequency.value = VOZ_DESDE_HZ;
+            const agudos = audioCtx.createBiquadFilter();
+            agudos.type = 'lowpass';
+            agudos.frequency.value = VOZ_HASTA_HZ;
             analizador = audioCtx.createAnalyser();
             analizador.fftSize = 1024;
-            fuente.connect(analizador);
+            fuente.connect(graves).connect(agudos).connect(analizador);
 
             const datos = new Float32Array(analizador.fftSize);
             const detector = crearDetectorDeSilencio({ silencioMs });

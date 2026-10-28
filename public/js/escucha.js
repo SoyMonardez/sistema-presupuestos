@@ -21,7 +21,13 @@
 
 const Escucha = (() => {
     const URL_SCRIBE = 'wss://api.elevenlabs.io/v1/speech-to-text/realtime';
-    const UMBRAL_VOZ = 0.015;       // RMS 0..1; ver el mismo umbral en voice.js
+    // RMS 0..1 en la banda de la voz (rmsVoz del worklet); ver el mismo umbral
+    // en voice.js. Es el mínimo: con ruido de fondo sube solo (ruido-de-fondo.js).
+    const UMBRAL_VOZ = 0.012;
+    // Con ruido de fondo el VAD de Scribe puede no cerrar nunca el pedazo: para
+    // él la música también es voz. Si el texto en vivo no cambia en este rato,
+    // ya terminó de hablar y se le pide que lo cierre.
+    const PARCIAL_QUIETO_MS = 1600;
     const COLA_VOZ_MS = 700;        // cuánto sigue "hablando" después del último sonido
     const SILENCIO_SEGMENTO_MS = 900;   // respaldo: pausa que cierra un pedazo
     const PREVIO_MS = 300;          // respaldo: audio de antes de que arranque la voz
@@ -45,6 +51,14 @@ const Escucha = (() => {
     let nivelActual = 0;
     let ultimaVoz = 0;
     let hablaba = false;
+    let ruido = null;               // el piso de ruido del lugar (ver ruido-de-fondo.js)
+
+    // En vivo: el último texto parcial que todavía no se cerró.
+    let parcialPendiente = '';
+    let parcialDesde = 0;
+    let cierreEnviado = false;      // ya se pidió cerrar este parcial
+    let sinCierreManual = false;    // Scribe rechazó el cierre a mano: no pedirlo más
+    let sinFiltroFondo = false;     // Scribe rechazó filter_background_audio
 
     // Respaldo: el pedazo que se está juntando para mandar a Whisper.
     let previo = [];
@@ -82,6 +96,7 @@ const Escucha = (() => {
         }
 
         activa = true;
+        ruido = RuidoDeFondo.crear({ minimo: UMBRAL_VOZ });
         ctx = Sonidos.contexto();
         try {
             if (moduloEn !== ctx) {
@@ -185,26 +200,40 @@ const Escucha = (() => {
             commit_strategy: 'vad',
             vad_silence_threshold_secs: '0.8',
         });
+        // Que separe la voz de quien habla del ruido de atrás (música, gente,
+        // máquinas): con eso el VAD se da cuenta de que se calló aunque el
+        // ruido siga.
+        if (!sinFiltroFondo) params.set('filter_background_audio', 'true');
         // Las palabras de su obra y su tarifario: Scribe las prefiere al dudar.
         if (!sinTerminos) for (const t of keyterms) params.append('keyterms', t);
         const conTerminos = !sinTerminos && keyterms.length > 0;
 
-        const ok = await abrirScribe(params);
-        // Si no arrancó con los términos, se prueba una vez sin ellos: mejor
-        // escuchar sin vocabulario que caer al respaldo por un parámetro.
-        if (!ok && conTerminos && activa) {
+        const r = await abrirScribe(params);
+        if (r === true) return true;
+        // Si la rechazó (no si no contestó: eso es la red), se prueba sin los
+        // extras de a uno. Mejor escuchar sin filtro o sin vocabulario que caer
+        // al respaldo por un parámetro.
+        if (r === 'rechazo' && activa && !sinFiltroFondo) {
+            sinFiltroFondo = true;
+            return conectarScribe();
+        }
+        if (r === 'rechazo' && activa && conTerminos) {
             sinTerminos = true;
             return conectarScribe();
         }
-        return ok;
+        return false;
     }
 
+    /** @returns {Promise<true|'rechazo'|false>} arrancó, la rechazó o no contestó */
     function abrirScribe(params) {
-        return new Promise((resolver) => {
+        return new Promise((resolverCon) => {
             let arranco = false;
             const socket = new WebSocket(`${URL_SCRIBE}?${params}`);
             ws = socket;
-            const plazo = setTimeout(() => { if (!arranco) { socket.close(); resolver(false); } }, 6000);
+            parcialPendiente = '';
+            cierreEnviado = false;
+            const resolver = (ok) => resolverCon(ok ? true : 'rechazo');
+            const plazo = setTimeout(() => { if (!arranco) { socket.close(); resolverCon(false); } }, 6000);
 
             socket.onmessage = (e) => {
                 let msg;
@@ -217,10 +246,20 @@ const Escucha = (() => {
                         cb.onModo?.('vivo');
                         resolver(true);
                         break;
-                    case 'partial_transcript':
-                        if (msg.text?.trim()) cb.onParcial?.(msg.text.trim());
+                    case 'partial_transcript': {
+                        const texto = msg.text?.trim();
+                        if (!texto) break;
+                        if (texto !== parcialPendiente) {
+                            parcialPendiente = texto;
+                            parcialDesde = Date.now();
+                            cierreEnviado = false;
+                        }
+                        cb.onParcial?.(texto);
                         break;
+                    }
                     case 'committed_transcript':
+                        parcialPendiente = '';
+                        cierreEnviado = false;
                         if (msg.text?.trim()) cb.onSegmento?.(msg.text.trim());
                         else cb.onParcial?.('');
                         break;
@@ -228,6 +267,9 @@ const Escucha = (() => {
                         if (msg.error) {
                             console.warn('[escucha] Scribe:', msg.message_type, msg.error);
                             if (!arranco) { clearTimeout(plazo); resolver(false); }
+                            // Si se quejó justo después de pedirle cerrar a mano,
+                            // no se le pide más: queda su VAD solo.
+                            if (cierreEnviado) sinCierreManual = true;
                         }
                 }
             };
@@ -246,12 +288,17 @@ const Escucha = (() => {
         });
     }
 
-    function enviarAScribe(pcm) {
+    function enviarAScribe(pcm, ahora) {
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        // Hay texto sin cerrar que no cambió en un rato: ya terminó de hablar,
+        // aunque el ruido de atrás no deje que el VAD de Scribe se dé cuenta.
+        const cerrar = Boolean(parcialPendiente) && !cierreEnviado && !sinCierreManual
+            && ahora - parcialDesde >= PARCIAL_QUIETO_MS;
+        if (cerrar) cierreEnviado = true;
         ws.send(JSON.stringify({
             message_type: 'input_audio_chunk',
             audio_base_64: aBase64(pcm),
-            commit: false,
+            commit: cerrar,
             sample_rate: 16000,
         }));
     }
@@ -318,12 +365,14 @@ const Escucha = (() => {
     }
 
     // ---------- Cada bloque de 100 ms ----------
-    function alRecibirAudio({ pcm, rms }) {
+    function alRecibirAudio({ pcm, rms, rmsVoz = rms }) {
         if (!activa || micPausado) return;
         const ahora = Date.now();
         nivelActual = Math.min(1, rms * 6);
 
-        const hayVoz = rms > UMBRAL_VOZ;
+        // Voz por encima del ruido del lugar, no cualquier sonido: con música
+        // de fondo, si no, "estaría hablando" siempre y nunca pasaría a pensar.
+        const hayVoz = ruido.esVoz(rmsVoz, ahora);
         if (hayVoz) ultimaVoz = ahora;
         const habla = ahora - ultimaVoz < COLA_VOZ_MS;
         if (habla !== hablaba) {
@@ -331,7 +380,7 @@ const Escucha = (() => {
             cb.onHabla?.(habla);
         }
 
-        if (modo === 'vivo') enviarAScribe(pcm);
+        if (modo === 'vivo') enviarAScribe(pcm, ahora);
         else if (modo === 'respaldo') juntarParaRespaldo(pcm, hayVoz, ahora);
     }
 
@@ -355,6 +404,9 @@ const Escucha = (() => {
         bloquesConVoz = 0;
         nivelActual = 0;
         hablaba = false;
+        ruido = null;
+        parcialPendiente = '';
+        cierreEnviado = false;
     }
 
     const nivel = () => nivelActual;

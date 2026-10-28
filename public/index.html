@@ -531,8 +531,10 @@
 <script src="js/borrador.js"></script>
 <script src="js/entradas.js?v=26"></script>
 <script src="js/precios.js"></script>
-<script src="js/chat.js"></script>
-<script src="js/voice.js"></script>
+<script src="js/chat.js?v=34"></script>
+<!-- ruido-de-fondo.js va ANTES de voice.js y escucha.js: los dos lo usan. -->
+<script src="js/ruido-de-fondo.js"></script>
+<script src="js/voice.js?v=34"></script>
 <!-- Datos reales del emisor (no se suben al repo, ver js/emisor.example.js). -->
 <script src="js/emisor.local.js"></script>
 <script src="js/pdf.js?v=33"></script>
@@ -540,7 +542,7 @@
 <script src="js/hablar.js?v=32"></script>
 <!-- La conversación por voz: usa Hablar, Estado e Items, y la pega app.js. -->
 <script src="js/sonidos.js?v=25"></script>
-<script src="js/escucha.js?v=31"></script>
+<script src="js/escucha.js?v=34"></script>
 <script src="js/orbe.js?v=31"></script>
 <script src="js/conversacion.js?v=31"></script>
 <script src="js/app.js?v=30"></script>

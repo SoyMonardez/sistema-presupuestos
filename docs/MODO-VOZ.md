@@ -59,6 +59,19 @@ Reglas que se le dan y que salieron de usarlo:
 - **Alucinaciones de Whisper:** sobre ruido o silencio, Whisper inventa frases de los subtítulos con los que se entrenó. Se piden los segmentos con su confianza y se descartan los que el propio Whisper marca como "probablemente no es voz". También se descartan frases típicas: probado con dos segundos de ruido, devolvía "¡Gracias!" las tres veces.
 - **Pedazos sin voz:** no se manda nada con menos de 400 ms de voz real (golpes, toses).
 
+## Con ruido de fondo (gimnasio, obra, música)
+
+Antes, "dejó de hablar" era que el volumen bajara de un umbral fijo. Con música de fondo nunca bajaba: el dictado no se mandaba y la conversación no pasaba a pensar hasta que paraba el ruido. Ahora hay cuatro capas:
+
+1. **Filtro de voz (200–4000 Hz).** El volumen para decidir se mide solo en la banda de la voz (en `pcm-worklet.js` para la conversación y con dos `BiquadFilter` en `voice.js` para el dictado). El bombo de la música (~50 Hz) baja 24 dB y la voz queda igual. El audio que se transcribe no se filtra.
+2. **Umbral que se acomoda al lugar** (`ruido-de-fondo.js`). Se toma el percentil 10 del volumen de los últimos 4 s como piso de ruido, y hay voz cuando el volumen pasa 2,5 veces ese piso. Un percentil bajo y no un promedio porque el promedio se lo come la voz misma si habla de corrido; entre palabra y palabra el volumen siempre baja al nivel del ruido. Los primeros 1,5 s no se le cree al piso, para que no aprenda de su propia voz si arranca a hablar apenas toca. En silencio de verdad sigue mandando el umbral fijo de siempre.
+3. **Filtro de fondo de Scribe** (`filter_background_audio`). Si Scribe no lo acepta, se reconecta sin él.
+4. **Red de seguridad por el texto.** Si el VAD igual no corta:
+   - Conversación: si el texto en vivo de Scribe no cambia en 1,6 s, se le pide que cierre el pedazo (`commit: true`). Si Scribe se queja, no se le pide más.
+   - Dictado: si dos transcripciones parciales seguidas (cada ~2,5 s) dan el mismo texto, se corta y se manda.
+
+`voice.test.mjs` prueba el detector con escenas de gimnasio (música con bombo, voz que sube y baja entre sílabas) en 100 semillas cada una.
+
 ## El altavoz del celular
 
 Con el micrófono abierto, Android y iPhone ponen el audio en **modo llamada**: sale bajito por el parlante de la oreja. Ninguno deja que una página web fuerce el altavoz mientras se captura audio.

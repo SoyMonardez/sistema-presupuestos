@@ -147,7 +147,11 @@ const Chat = (() => {
 
     let textoPrevio = '';       // lo que ya estaba escrito antes de dictar
     let parcialEnVuelo = false; // hay una transcripción parcial dando vueltas
+    let ultimoParcial = '';     // el texto de la parcial anterior, para ver si cambió
     let dictadoCancelado = false;
+
+    // Para comparar dos parciales sin que una coma o una mayúscula las haga distintas.
+    const comparable = (t) => t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 
     function dictar() {
         const btn = $('#chat-mic');
@@ -170,6 +174,7 @@ const Chat = (() => {
 
         textoPrevio = el.value.trim();
         parcialEnVuelo = false;
+        ultimoParcial = '';
         dictadoCancelado = false;
 
         const escribir = (texto, enVivo) => {
@@ -199,6 +204,13 @@ const Chat = (() => {
                     const limpio = String(text || '').trim();
                     // Si mientras tanto se cortó, no se pisa el campo.
                     if (limpio && Voice.isActive()) escribir(limpio, true);
+                    // Dos parciales seguidas con el mismo texto: en esos
+                    // segundos no dijo nada nuevo, así que terminó. Es lo que
+                    // corta el dictado cuando hay ruido de fondo (música, un
+                    // gimnasio) y el volumen no llega a bajar nunca.
+                    const ahora = comparable(limpio);
+                    if (ahora && ahora === ultimoParcial && Voice.isActive()) Voice.stop();
+                    ultimoParcial = ahora;
                 } catch {
                     // El parcial es un lujo: si falla, sigue la grabación y el
                     // texto bueno llega igual al final.
