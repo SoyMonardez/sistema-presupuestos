@@ -20,7 +20,12 @@ function hashesDeScriptsInline(html) {
     const re = /<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi;
     let m;
     while ((m = re.exec(html)) !== null) {
-        const contenido = m[1];
+        // El navegador convierte los finales de línea de Windows en \n antes
+        // de calcular el hash. Si el index.html quedó con \r\n (git en Windows
+        // lo hace), el hash de acá no coincidía nunca y la CSP bloqueaba los
+        // dos scripts de la página: el del tema y el que registra el service
+        // worker.
+        const contenido = m[1].replace(/\r\n?/g, '\n');
         if (!contenido.trim()) continue;
         const hash = crypto.createHash('sha256').update(contenido, 'utf8').digest('base64');
         hashes.push(`'sha256-${hash}'`);
