@@ -16,8 +16,11 @@ services:
       NODE_ENV: production
       PORT: 3002
     ports:
-      # Acceso directo por IP sin dominio: http://IP_DEL_VPS:3002
-      - "3002:3002"
+      # Solo desde el propio VPS (el healthcheck del deploy). Desde afuera se
+      # entra únicamente por el Nginx Proxy Manager, con HTTPS: abierto a todos,
+      # http://IP:3002 mandaba la contraseña y el token en claro y dejaba
+      # inventar X-Forwarded-For para saltear el límite del login.
+      - "127.0.0.1:3002:3002"
     volumes:
       # La DB SQLite vive acá — sobrevive rebuilds
       - presupuestos_data:/app/data
