@@ -21,6 +21,8 @@ import { complete, completeStream } from '../ai/provider.js';
 import { isConfigured as vozConfigurada, tokenTranscripcion } from '../ai/elevenlabs.js';
 import { normalizeOps, normalizeEncabezado } from '../lib/ops.js';
 import { atajo, normalizarCorte, quitarEstimados } from '../lib/cortador.js';
+import { separarSinReferencia } from '../lib/referencias.js';
+import { abreviarEncabezado } from '../lib/abreviaturas.js';
 import { partialString, objectBefore } from '../lib/partial-json.js';
 import { priceRefsPromptBlock } from './prices.js';
 import { unitsPromptBlock } from './units.js';
@@ -63,6 +65,9 @@ Te paso "resto" (lo que quedó esperando de antes) y "nuevo" (lo último que dij
 - "instrucciones": cada pedido COMPLETO, en el orden en que los dijo, con el texto limpio de muletillas ("eh", "este", "mirá") pero sin cambiar ningún dato. Un pedido por item o por cambio: "agregá demolición a 300 mil y un contrapiso de 20 metros a 15 lucas" son DOS pedidos.
 - "tipo": "pedido" para todo lo que hay que pensar (agregar, cambiar, borrar items, poner datos del encabezado, preguntas sobre el presupuesto). Solo usá "confirmar", "confirmar_todo", "rechazar", "deshacer" o "salir" si esa es la frase ENTERA ("sí", "sí a todo", "no", "deshacé eso", "terminamos").
 - "resto": lo del final que parece CORTADO a mitad de idea y va a seguir (termina en "a", "de", "con", "y", "el precio es", un número a medio decir, o nombra un item sin decir nada más cuando venía dando cantidad y precio de los anteriores). Si todo está completo, "".
+- Los DATOS SUELTOS van con el trabajo que nombró justo antes, NUNCA solos: si lee una planilla ("limpieza periódica y final… global… uno… 650 mil"), nombre, unidad, cantidad y precio son UN solo pedido. Si "nuevo" empieza con datos sin nombre ("global, cantidad 1, 650 mil") y "resto" tiene un nombre, juntalos en un pedido. Nunca devuelvas un pedido que sea solo números.
+- Al revés también: cuando después del precio de un item empieza el nombre de OTRO trabajo, ahí se corta. Ese nombre nuevo, si todavía no trae sus números, va a "resto".
+  Ej: nuevo = "cordones 35 metros lineales a 22 mil limpieza periódica y final" → instrucciones: ["cordones 35 metros lineales a 22 mil"], resto: "limpieza periódica y final".
 - Un pedido está completo cuando ya se puede actuar aunque falten datos: "agregá un item de pintura" alcanza; el que piensa estima lo que falte.
 - "acuse": 2 a 5 palabras para contestarle al toque mientras se piensa, en castellano rioplatense ("Dale, anoto la demolición", "Ahí lo cambio"). "" si no hay pedidos.`;
 
@@ -120,7 +125,23 @@ CARGAR SIEMPRE, AUNQUE FALTEN DATOS (esto manda por encima de lo de arriba):
 - Nombres de item claros y con mayúscula inicial ("Demolición de mampostería", no "demolicion"). Si da medidas o materiales, van en "detail".
 - "encabezado": solo los datos de la cabecera que pidió cambiar. Claves posibles: "name" (el título del presupuesto), "client", "location" (ubicación de la obra), "client_role", "client_address", "client_cp", "client_phone", "client_email", "validity_days" (número), "advance_pct" (número, porcentaje de anticipo). Si no pidió nada del encabezado, {}.
 - Si pregunta algo (el total, cuántos items van), contestalo en "respuesta" sin ops.
-- Preguntá SOLO si no se entiende QUÉ trabajo es o a qué item se refiere (ruido, una frase cortada sin sentido). Que falte un número nunca es motivo para preguntar.
+DE QUÉ ITEM HABLA (esto es lo que más daño hace si sale mal: él dicta sin mirar y no se entera):
+- Un pedido que nombra un trabajo nuevo y da números ("limpieza periódica y final, global, 1, 650 mil") es UN item nuevo con esos datos. Esos números son de ESE item: nunca se los pongas a otro que ya estaba.
+- Si varios pedidos de la lista van juntos (uno con el nombre y el siguiente con los datos sueltos), son el mismo item: cargalo una sola vez con todo.
+- Datos sueltos sin nombre ("ponele 650 mil", "cantidad 3") son del item que se nombró último en la conversación: el último que cargaste o del que se venía hablando. No de otro.
+- Para cambiar o borrar un item que ya estaba, él tiene que nombrarlo (o una palabra de su nombre), decir su número o decir "el último". Si no, NO lo toques.
+- Un "update" no sirve para cargar un trabajo nuevo: si el nombre que dijo no está en la lista, es un "add".
+
+CUÁNDO PREGUNTAR ANTES DE HACER:
+- Que falte un número NUNCA es motivo para preguntar: cargá y avisá.
+- Preguntá (sin ops para esa parte) cuando:
+  · no sabés a qué item van unos datos o un cambio;
+  · la frase parece cortada o no tiene sentido (ruido, una palabra a medias, "y el… ");
+  · hay dos lecturas que cambian la plata (¿650 o 650 mil?, ¿el precio es por metro o el total?);
+  · el cambio pisaría un precio que ya estaba con otro muy distinto sin que él haya nombrado ese item.
+- Lo que sí está claro, cargalo igual; preguntá solo por lo dudoso. En "pensamiento" decí qué quedó sin hacer y por qué; en "respuesta", la pregunta corta ("¿Los 650 mil van a la limpieza?").
+
+ABREVIATURAS en el encabezado y en los nombres: escribí como se escribe en un presupuesto, no como se dice. "avenida" → "Av.", "bulevar" → "Bv.", "barrio" → "B°", "pasaje" → "Pje.", "número 450" → "N° 450", "departamento 3" → "Dpto. 3", "manzana B" → "Mza. B", "General Acha" → "Gral. Acha", "doctor" → "Dr.", "ingeniero" → "Ing.", "arquitecto" → "Arq.". Si él pide la palabra completa, respetalo.
 - En "respuesta" no expliques el coeficiente, los gastos generales ni de dónde salió cada precio: eso ya lo ve en pantalla y hablado cansa.
 - "respuesta": lo que vas a DECIR en voz alta. 1 o 2 oraciones cortas, sin markdown, sin listas, sin repetir todos los números (ya los ve). ${auto
         ? 'Los cambios se aplican solos: hablá en pasado y cerrá invitando a seguir. Ej: "Listo, agregué la demolición. ¿Con qué seguimos?"'
@@ -205,11 +226,22 @@ router.post('/turno', async (req, res) => {
     // Las ops se validan y se mandan apenas el modelo las termina de escribir,
     // sin esperar a que redacte la respuesta: así la pantalla ya muestra el
     // cambio mientras se genera lo que va a decir.
+    // Lo último que se habló, para entender "ponele 650 mil" (ver referencias.js).
+    const recientes = (Array.isArray(req.body?.historial) ? req.body.historial : [])
+        .slice(-2).map(h => String(h?.texto || '').slice(0, 1200));
+    let dudosos = [];
+
     const validar = (obj) => {
         const { ops: crudas, sinPrecio } = quitarEstimados(obj?.ops, instrucciones);
-        const { ops, warnings } = normalizeOps(crudas, items, catalog, 200, markup);
+        const normal = normalizeOps(crudas, items, catalog, 200, markup);
+        const { warnings } = normal;
+        // Un cambio sobre un item que él no nombró no se aplica: se pregunta.
+        const separadas = separarSinReferencia(normal.ops, items, { pedidos: instrucciones, recientes });
+        dudosos = separadas.dudosos;
+        if (dudosos.length) warnings.push(`No toqué ${dudosos.map(n => `«${n}»`).join(', ')}: no nombraste ese item.`);
         if (sinPrecio.length) warnings.push(`Sin precio (dictámelo cuando quieras): ${sinPrecio.join(', ')}.`);
-        return { ops, warnings, encabezado: normalizeEncabezado(obj?.encabezado) };
+        const encabezado = abreviarEncabezado(normalizeEncabezado(obj?.encabezado), instrucciones);
+        return { ops: separadas.ops, warnings, encabezado };
     };
 
     let crudo = '';
@@ -245,7 +277,13 @@ router.post('/turno', async (req, res) => {
         });
 
         if (!opsEnviadas) enviar('ops', validar(final));
-        const respuesta = String(final?.respuesta || final?.reply || '').trim().slice(0, 1200);
+        let respuesta = String(final?.respuesta || final?.reply || '').trim().slice(0, 1200);
+        // Lo que iba a decir cuenta un cambio que no se hizo: se reemplaza por
+        // la pregunta, que además queda en la conversación para el turno que
+        // viene ("a la limpieza" se entiende con esto).
+        if (dudosos.length) {
+            respuesta = `No me quedó claro a qué item iba eso: no toqué ${dudosos.map(n => `«${n}»`).join(' ni ')}. ¿A cuál se lo pongo?`;
+        }
         enviar('done', {
             pensamiento: String(final?.pensamiento || pensado).trim().slice(0, 2000),
             respuesta: respuesta || dicho,
