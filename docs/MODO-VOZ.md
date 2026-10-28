@@ -92,6 +92,16 @@ La solución: en pantallas táctiles, el micrófono **se suelta mientras el asis
 
 **Volumen:** un `<audio>` no pasa del volumen máximo. La voz pasa por un compresor, una ganancia y un limitador con techo. Medido con respuestas reales: entre 7 y 11,5 dB más fuerte sin recortar ninguna muestra.
 
+## La burbuja: flotando sobre otras apps
+
+Para leer un pliego que está en WhatsApp mientras el presupuesto se carga solo. Una página web no puede dibujar encima de otras apps, pero sí puede mandar un video a "imagen en imagen": Android lo muestra en una ventanita arriba de todo, que se arrastra a cualquier parte de la pantalla y mantiene viva la página (el micrófono sigue abierto). `burbuja.js` pinta el orbe en un canvas, lo convierte en video con `captureStream()` y ese video es el que flota. Debajo del orbe se ve en qué anda y lo último que entendió.
+
+- Se abre con el botón de arriba a la izquierda del panel (solo aparece si el navegador lo permite). Tiene que ser con un toque: el navegador no deja abrirla solo.
+- La ventanita no se puede tocar como un botón. Android le pone sus controles: volver a la app, cerrar y reproducir/pausa, que acá es **pausar y seguir escuchando**.
+- Con la burbuja abierta el micrófono **no se suelta** para hablar (ver "El altavoz del celular"): pedirlo de nuevo con la app atrás puede fallar y dejarlo sin escuchar. La respuesta sale más bajito, pero mientras lee un pliego casi no hace falta oírla.
+- Se pinta con un intervalo y no con `requestAnimationFrame`, que se frena cuando la página no está a la vista.
+- En iPhone no sirve: Safari corta el micrófono al salir a otra app.
+
 ## La interfaz
 
 - **Orbe en canvas:** se deforma con el volumen. Cada fase tiene su color y su movimiento, para reconocerla aunque no se mire el color: escucha (celeste, respira), piensa (violeta, gira), carga (naranja, late), habla (verde agua, ondas). El borde de toda la pantalla brilla con el color de la fase.

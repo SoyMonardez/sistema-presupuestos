@@ -150,6 +150,12 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
     // pasa, así que ahí sigue escuchando siempre y se lo puede cortar hablando.
     const ALTAVOZ = window.matchMedia('(pointer: coarse)').matches;
     let reabriendoMic = false;
+    // Con la burbuja flotando (ver burbuja.js) el micrófono no se suelta para
+    // hablar: él está en otra app, y volver a pedir el micrófono desde atrás
+    // puede fallar y dejarlo sin escuchar. La respuesta sale más bajito, pero
+    // mientras lee un pliego casi no hace falta oírla.
+    const sueltaMic = () => ALTAVOZ && !Burbuja.activa();
+    let enPausa = false;            // el botón de pausa de la burbuja
     const CIERRE_TURNO_MS = 2500;   // sin hablar este rato, lo que quedó partido se manda igual
     const ACUSE_MS = 1300;          // si pensar tarda más que esto, contesta algo corto
     const MAX_HISTORIAL = 12;
@@ -210,6 +216,18 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
             },
         });
         $('#btn-conversar').addEventListener('click', () => (activo ? salir() : entrar()));
+        const btnBurbuja = $('#voz-burbuja');
+        btnBurbuja.hidden = !Burbuja.soportada();
+        btnBurbuja.addEventListener('click', async () => {
+            const ok = await Burbuja.abrir({
+                onPausa: (si) => {
+                    enPausa = si;
+                    if (si) Hablar.callar();
+                    Orbe.subtitulo(si ? 'En pausa' : '');
+                },
+            });
+            if (!ok) toast('No pude dejar el orbe flotando en este navegador', true);
+        });
         document.addEventListener('keydown', (e) => { if (activo && e.key === 'Escape') salir(); });
     }
 
@@ -257,6 +275,8 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
         controlador?.abort();
         Escucha.detener();
         Hablar.callar();
+        Burbuja.cerrar();
+        enPausa = false;
         Orbe.cerrar();
         $('#btn-conversar').classList.remove('activo');
         if (pendientes.length) toast('Quedaron cambios sin aplicar: los descarté');
@@ -275,7 +295,7 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
         dichosRecientes.push({ texto, hasta: Date.now() + dura + ECO_MS });
         // Antes de que empiece a sonar: con el micrófono suelto, el celular
         // usa el altavoz.
-        if (ALTAVOZ) Escucha.pausarMic();
+        if (sueltaMic()) Escucha.pausarMic();
         Hablar.encolar(texto);
     }
 
@@ -286,7 +306,7 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
     }
 
     function alParcial(texto) {
-        if (!activo) return;
+        if (!activo || enPausa) return;
         // Su propio eco no cuenta como que él habló.
         if (esMiEco(texto)) return;
         ultimaVozUsuario = Date.now();
@@ -297,7 +317,7 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
     }
 
     function alSegmento(texto) {
-        if (!activo) return;
+        if (!activo || enPausa) return;
         if (esMiEco(texto)) return;
         ultimaVozUsuario = Date.now();
         if (Hablar.estaHablando()) Hablar.callar();
@@ -534,7 +554,7 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
                 reabriendoMic = false;
                 if (ok && activo) Sonidos.teEscucho();
             });
-        } else if (!ALTAVOZ && estabaHablando && !hablando) {
+        } else if (!sueltaMic() && estabaHablando && !hablando) {
             Sonidos.teEscucho();
         }
         estabaHablando = hablando;

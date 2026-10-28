@@ -256,12 +256,26 @@ const Orbe = (() => {
 
     function dibujar(ms) {
         cuadro = requestAnimationFrame(dibujar);
-        const lado = canvas.clientWidth || 96;
+        pintar(g2d, canvas.clientWidth || 96, ms);
+    }
+
+    /**
+     * Pinta el orbe en cualquier canvas: el de la página y el de la burbuja que
+     * flota sobre otras apps (ver burbuja.js), que dibuja aunque esta página no
+     * esté a la vista.
+     */
+    let ultimoCuadro = -1;
+    let crudo = 0;
+    function pintar(g2d, lado, ms) {
         const c = lado / 2;
         const t = ms / 1000;
 
-        const crudo = medirNivel() || 0;
-        suavizado += (crudo - suavizado) * 0.25;
+        // Con dos lienzos pintando a la vez, el nivel se mide una sola vez por cuadro.
+        if (ultimoCuadro !== ms) {
+            ultimoCuadro = ms;
+            crudo = medirNivel() || 0;
+            suavizado += (crudo - suavizado) * 0.25;
+        }
 
         // Cada fase se mueve distinto: así se distingue aunque no se vea el color.
         let radio = lado * 0.3, amp = 0.04, giro = t * 0.4;
@@ -319,5 +333,11 @@ const Orbe = (() => {
         ajustarCanvas();
     });
 
-    return { init, abrir, cerrar, cambiarFase, subtitulo, permitirDeshacer, nuevaTarjeta, minimizar, expandir, estaMini: () => mini };
+    return {
+        init, abrir, cerrar, cambiarFase, subtitulo, permitirDeshacer, nuevaTarjeta, minimizar, expandir,
+        estaMini: () => mini,
+        pintar,
+        // Lo que muestra la burbuja debajo del orbe.
+        textos: () => ({ fase: faseEl?.textContent || '', subtitulo: subEl?.textContent || '', color: colores[0] }),
+    };
 })();

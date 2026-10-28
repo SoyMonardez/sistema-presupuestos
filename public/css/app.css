@@ -2369,6 +2369,17 @@ body.voz-activa .totalbar { visibility: hidden; }
     -webkit-tap-highlight-color: transparent;
 }
 .voz-mini-btn:active { transform: translateY(-50%) scale(.94); }
+/* El de la burbuja va del otro lado de la manija. */
+.voz-burbuja-btn { right: auto; left: -4px; }
+.voz-mini-btn[hidden] { display: none; }
+/* El video de la burbuja tiene que estar en la página pero no se ve. */
+.burbuja-video {
+    position: fixed;
+    width: 1px; height: 1px;
+    left: -10px; top: -10px;
+    opacity: 0;
+    pointer-events: none;
+}
 
 .voz-modo.mini .voz-panel { display: none; }
 .voz-modo.mini .voz-borde {
