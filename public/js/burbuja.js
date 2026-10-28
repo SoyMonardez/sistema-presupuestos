@@ -51,29 +51,19 @@ const Burbuja = (() => {
 
     // requestAnimationFrame se frena cuando la página no está a la vista, que
     // es justo cuando flota: se pinta con un intervalo.
+    // Solo el orbe, lo más grande que entra, sobre negro: la ventanita de
+    // Android siempre es un rectángulo y no puede ser transparente, así que
+    // el negro es lo que más se parece a "nada". El color y el movimiento ya
+    // dicen en qué anda; en pausa el video se congela y el orbe queda quieto.
+    const ESCALA = 1.15;   // más grande no: hablando, el borde se saldría
     function pintarCuadro() {
-        const { fase, subtitulo, color } = Orbe.textos();
-        const pausada = video.paused;
-        g2d.fillStyle = '#0b1120';
+        const lado = LADO * ESCALA;
+        g2d.fillStyle = '#000';
         g2d.fillRect(0, 0, LADO, LADO);
-
-        // El orbe arriba; abajo en qué anda y lo último que entendió, para
-        // poder chequearlo sin volver a la app.
         g2d.save();
-        g2d.translate(LADO * 0.15, 4);
-        Orbe.pintar(g2d, LADO * 0.7, performance.now());
+        g2d.translate((LADO - lado) / 2, (LADO - lado) / 2);
+        Orbe.pintar(g2d, lado, performance.now(), { fondo: '#000' });
         g2d.restore();
-
-        g2d.textAlign = 'center';
-        g2d.fillStyle = pausada ? '#94a3b8' : color;
-        g2d.font = '600 26px system-ui, sans-serif';
-        g2d.fillText(pausada ? 'En pausa' : fase, LADO / 2, LADO * 0.8);
-        if (subtitulo && !pausada) {
-            g2d.fillStyle = '#e2e8f0';
-            g2d.font = '20px system-ui, sans-serif';
-            const corto = subtitulo.length > 30 ? '…' + subtitulo.slice(-29) : subtitulo;
-            g2d.fillText(corto, LADO / 2, LADO * 0.92);
-        }
     }
 
     /**

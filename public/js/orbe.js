@@ -263,10 +263,14 @@ const Orbe = (() => {
      * Pinta el orbe en cualquier canvas: el de la página y el de la burbuja que
      * flota sobre otras apps (ver burbuja.js), que dibuja aunque esta página no
      * esté a la vista.
+     *
+     * `fondo`: color con que se tapa antes de pintar. Sin él se borra a
+     * transparente, que en la página deja ver lo de atrás pero en la burbuja
+     * (un video) sale como un cuadrado blanco.
      */
     let ultimoCuadro = -1;
     let crudo = 0;
-    function pintar(g2d, lado, ms) {
+    function pintar(g2d, lado, ms, { fondo = null } = {}) {
         const c = lado / 2;
         const t = ms / 1000;
 
@@ -289,7 +293,8 @@ const Orbe = (() => {
         }
         else if (fase === 'esperando') { radio *= 1 + Math.sin(t * 2) * 0.03; amp = 0.02; }
 
-        g2d.clearRect(0, 0, lado, lado);
+        if (fondo) { g2d.fillStyle = fondo; g2d.fillRect(0, 0, lado, lado); }
+        else g2d.clearRect(0, 0, lado, lado);
 
         // Halo
         const halo = g2d.createRadialGradient(c, c, radio * 0.6, c, c, radio * 1.6);
@@ -337,7 +342,5 @@ const Orbe = (() => {
         init, abrir, cerrar, cambiarFase, subtitulo, permitirDeshacer, nuevaTarjeta, minimizar, expandir,
         estaMini: () => mini,
         pintar,
-        // Lo que muestra la burbuja debajo del orbe.
-        textos: () => ({ fase: faseEl?.textContent || '', subtitulo: subEl?.textContent || '', color: colores[0] }),
     };
 })();
