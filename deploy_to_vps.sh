@@ -73,4 +73,4 @@ fi
 '
 
 echo ""
-echo "✓ Deploy completado → http://${VPS_IP}:3002"
+echo "✓ Deploy completado (se entra por el dominio del Nginx Proxy Manager, con HTTPS)"
