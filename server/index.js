@@ -45,8 +45,13 @@ app.set('trust proxy', 1);
 // raro" en vez de "te roban la sesión": ya pasó una vez que el nombre de un item
 // venido de un Excel importado terminara ejecutándose.
 const CSP = buildCsp(path.join(__dirname, '..', 'public', 'index.html'));
-app.use((_req, res, next) => {
+app.use((req, res, next) => {
     if (CSP) res.setHeader('Content-Security-Policy', CSP);
+    // Que el navegador no vuelva a pedir esta app por http aunque alguien le
+    // pase un link http:// (ahí un intermediario podría leer la contraseña).
+    // Solo cuando llegó por HTTPS: req.secure sale del X-Forwarded-Proto del
+    // proxy, que es el único que puede llegar (ver el puerto en docker-compose).
+    if (req.secure) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
     // Nada de esto necesita cámara, micrófono va aparte (lo pide el dictado).

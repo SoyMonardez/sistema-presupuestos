@@ -30,16 +30,21 @@ export function loadAccesses(env = process.env) {
 export const ACCESSES = loadAccesses();
 
 // Token: base64url(payload).hmac — sin dependencias, suficiente para un solo usuario.
-const TOKEN_DAYS = 90;
+// Para cerrar TODAS las sesiones abiertas (un celular perdido, un token que se
+// filtró) se cambia APP_SECRET en el .env y se reinicia: los tokens viejos dejan
+// de validar. Un mes y no tres: si uno se escapa, sirve menos tiempo.
+const TOKEN_DAYS = 30;
 
 function sign(payload) {
     return crypto.createHmac('sha256', APP_SECRET).update(payload).digest('base64url');
 }
 
+// Se comparan los hashes y no los textos: así los dos lados miden lo mismo y el
+// tiempo de la comparación no delata el largo de la contraseña.
 function safeEqual(a, b) {
-    const ba = Buffer.from(a);
-    const bb = Buffer.from(b);
-    return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
+    const ha = crypto.createHash('sha256').update(String(a)).digest();
+    const hb = crypto.createHash('sha256').update(String(b)).digest();
+    return crypto.timingSafeEqual(ha, hb);
 }
 
 export function issueToken(ws = PRINCIPAL) {
