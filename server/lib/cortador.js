@@ -41,6 +41,24 @@ export function quedaColgado(texto) {
     return COLGADO.test(String(texto || '').trim());
 }
 
+// Un número dicho en letras o en cifras, o jerga de plata.
+const NUMERO = /\d|\b(uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|quince|veinte|treinta|cuarenta|cincuenta|sesenta|setenta|ochenta|noventa|cien|ciento|doscientos|trescientos|quinientos|mil|medio|media|luca|lucas|palo|palos|gamba|gambas)\b/i;
+// Lo que se contesta o se borra no espera datos.
+const NO_ESPERA = /[?¿]|^\s*(cu[aá]nt|qu[eé]\b|c[oó]mo|cu[aá]l|d[oó]nde|sac[aá]|borr[aá]|elimin[aá]|quit[aá])/i;
+
+/**
+ * ¿El pedido nombra un trabajo pero todavía no dio ningún número? Leyendo una
+ * planilla dice el nombre, respira y recién después "global, uno, 650 mil".
+ * Si el nombre se manda solo, el item se carga en $0 y los datos llegan
+ * sueltos en el pedido siguiente, donde el que piensa ya no sabe de quién son:
+ * pasó que el precio de la limpieza terminó en los cordones. Así que espera:
+ * si no llega nada más, el cierre de turno lo manda igual.
+ */
+export function esperaDatos(texto) {
+    const t = String(texto || '').trim();
+    return Boolean(t) && !NUMERO.test(t) && !NO_ESPERA.test(t);
+}
+
 // ¿Pidió que el asistente ponga precios por su cuenta?
 const PIDE_ESTIMAR = /estim|precio de mercado|a costo|costo directo|calcul[aá]le?s? (el |un )?precio|ponele?s? (un )?precio|inventale?s?|sac[aá]le?s? (el |un )?precio/i;
 
@@ -102,10 +120,11 @@ export function normalizarCorte(raw, textoCompleto, { final = false } = {}) {
     // ("…18 metros cuadrados a"): si se manda así, el precio llega en el
     // pedido siguiente y queda como otro item. Esa regla no se le deja al
     // modelo: si el último pedido termina en una palabra que pide continuación,
-    // vuelve a quedar esperando.
+    // o nombra un trabajo sin ningún número todavía (ver esperaDatos), vuelve a
+    // quedar esperando.
     if (!final && !resto && instrucciones.length) {
         const ultimo = instrucciones[instrucciones.length - 1];
-        if (ultimo.tipo === 'pedido' && quedaColgado(ultimo.texto)) {
+        if (ultimo.tipo === 'pedido' && (quedaColgado(ultimo.texto) || esperaDatos(ultimo.texto))) {
             resto = instrucciones.pop().texto;
         }
     }

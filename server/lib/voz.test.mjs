@@ -2,7 +2,9 @@
 // necesitan un modelo: los atajos del cortador, su red de seguridad, la
 // validación del encabezado y la lectura de las ops antes de que termine el JSON.
 
-import { atajo, normalizarCorte, quedaColgado, quitarEstimados } from './cortador.js';
+import { atajo, normalizarCorte, quedaColgado, quitarEstimados, esperaDatos } from './cortador.js';
+import { separarSinReferencia } from './referencias.js';
+import { abreviar, abreviarEncabezado } from './abreviaturas.js';
 import { normalizeEncabezado } from './ops.js';
 import { objectBefore } from './partial-json.js';
 import { vocabularioVoz, promptWhisper, esAlucinacion } from './vocabulario.js';
@@ -73,6 +75,85 @@ for (const texto of [
     for (const t of ['contrapiso 20 metros a 15 lucas', 'agregá demolición', 'poné de título Casa Pérez']) {
         prueba(`no colgado: "${t}"`, !quedaColgado(t));
     }
+}
+
+// ---- nombre sin datos: espera ----
+{
+    // Leyendo una planilla: el nombre llega antes que los números.
+    const r = normalizarCorte({ instrucciones: [
+        { texto: 'cordones 40 metros lineales a 12 mil', tipo: 'pedido' },
+        { texto: 'limpieza periódica y final', tipo: 'pedido' },
+    ], resto: '' }, '');
+    prueba('corte: un nombre sin números al final espera los datos', r.instrucciones.length === 1 && r.resto === 'limpieza periódica y final');
+    const f = normalizarCorte({ instrucciones: [{ texto: 'limpieza periódica y final', tipo: 'pedido' }], resto: '' }, '', { final: true });
+    prueba('corte: al cerrar el turno, el nombre solo se manda igual', f.instrucciones.length === 1 && f.resto === '');
+    for (const t of ['limpieza periódica y final', 'agregá pintura', 'poné de cliente Juan Pérez']) {
+        prueba(`espera datos: "${t}"`, esperaDatos(t));
+    }
+    for (const t of ['limpieza global 1 a 650 mil', 'pintura a dos lucas', '¿cuánto va el total?', 'cuántos items van', 'sacá los cordones']) {
+        prueba(`no espera datos: "${t}"`, !esperaDatos(t));
+    }
+}
+
+// ---- de qué item habla ----
+{
+    const items = [
+        { name: 'Demolición de mampostería' },
+        { name: 'Contrapiso' },
+        { name: 'Cordones de hormigón' },
+    ];
+    const precioA = (num) => ({ action: 'update', num, fields: { unit_price: 650000 } });
+    const alta = { action: 'add', item: { name: 'Limpieza periódica y final', unit_price: 650000 } };
+
+    // Lo que pasó: el precio de la limpieza fue a parar a los cordones.
+    let r = separarSinReferencia([alta, precioA(3)], items, {
+        pedidos: ['limpieza periódica y final global cantidad 1 650 mil'],
+        recientes: ['cordones 40 metros a 12 mil', 'Agrego «Cordones de hormigón»'],
+    });
+    prueba('referencia: no toca un item que no nombró', r.ops.length === 1 && r.ops[0] === alta && r.dudosos.join() === 'Cordones de hormigón');
+
+    r = separarSinReferencia([precioA(3)], items, { pedidos: ['a los cordones ponele 650 mil'] });
+    prueba('referencia: nombrado, pasa (aunque sea en plural)', r.ops.length === 1);
+    r = separarSinReferencia([precioA(2)], items, { pedidos: ['al piso ponele 20 lucas'] });
+    prueba('referencia: con una palabra de su nombre, pasa', r.ops.length === 1);
+    r = separarSinReferencia([precioA(1)], items, { pedidos: ['al item 1 ponele 650 mil'] });
+    prueba('referencia: por número, pasa', r.ops.length === 1);
+    r = separarSinReferencia([precioA(1)], items, { pedidos: ['el ítem uno a 650 mil'] });
+    prueba('referencia: por número en letras, pasa', r.ops.length === 1);
+    r = separarSinReferencia([precioA(3)], items, { pedidos: ['al último ponele 650 mil'] });
+    prueba('referencia: "el último", pasa', r.ops.length === 1);
+    r = separarSinReferencia([precioA(1), precioA(2), precioA(3)], items, { pedidos: ['subí todos un 10%'] });
+    prueba('referencia: "todos", pasan todos', r.ops.length === 3);
+    r = separarSinReferencia([{ action: 'remove', num: 2 }], items, { pedidos: ['sacá la demolición'] });
+    prueba('referencia: borrar uno que no nombró, no', r.ops.length === 0 && r.dudosos.join() === 'Contrapiso');
+
+    // "ponele 650 mil" justo después de cargar algo: va a lo que se venía hablando.
+    r = separarSinReferencia([precioA(3)], items, { pedidos: ['ponele 650 mil'], recientes: ['Agrego «Cordones de hormigón» en $0.'] });
+    prueba('referencia: datos sueltos van a lo último que se habló', r.ops.length === 1);
+    r = separarSinReferencia([precioA(1)], items, { pedidos: ['ponele 650 mil'], recientes: ['Agrego «Cordones de hormigón» en $0.'] });
+    prueba('referencia: pero no a otro', r.ops.length === 0);
+    r = separarSinReferencia([{ action: 'update', num: 3, fields: { unit: 'm³' }, convert: { from: 'm²', to: 'm³' } }], items, { pedidos: ['pasá todo a metros cúbicos'] });
+    prueba('referencia: las conversiones no se revisan', r.ops.length === 1);
+}
+
+// ---- abreviaturas ----
+{
+    for (const [dicho, escrito] of [
+        ['Obra avenida Libertador 2000', 'Obra Av. Libertador 2000'],
+        ['Av Rioja 300', 'Av. Rioja 300'],
+        ['barrio Rivadavia Norte manzana B casa 5', 'B° Rivadavia Norte Mza. B casa 5'],
+        ['calle General Acha número 450', 'calle Gral. Acha N° 450'],
+        ['departamento 3, Doctor Ortega', 'Dpto. 3, Dr. Ortega'],
+        ['bulevar Sarmiento', 'Bv. Sarmiento'],
+        ['Casa del barrio', 'Casa del barrio'],
+        ['Limpieza general', 'Limpieza general'],
+    ]) {
+        prueba(`abreviar: "${dicho}"`, abreviar(dicho) === escrito);
+    }
+    const e = abreviarEncabezado({ name: 'Obra avenida Córdoba', client: 'Avenida SRL' }, ['poné el título obra avenida córdoba']);
+    prueba('abreviar: el título sí, el cliente no', e.name === 'Obra Av. Córdoba' && e.client === 'Avenida SRL');
+    const c = abreviarEncabezado({ name: 'Obra avenida Córdoba' }, ['poné avenida completo']);
+    prueba('abreviar: si pide la palabra completa, se respeta', c.name === 'Obra avenida Córdoba');
 }
 
 // ---- quitarEstimados ----

@@ -101,8 +101,13 @@ const ConversacionLogica = (() => {
         return `Listo, ${partes.join(' y ')}.${aviso} ¿Con qué seguimos?`;
     }
 
-    /** ¿Es momento de hablar? Solo si él no está hablando y ya hizo una pausa. */
-    function tocaHablar({ hayParaDecir, usuarioHabla, msDesdeQueHablo, ocupado, pausaMs = 1200 }) {
+    /**
+     * ¿Es momento de hablar? Solo si él no está hablando y ya hizo una pausa.
+     * La pausa es larga a propósito: leyendo una planilla respira entre fila y
+     * fila, y si el asistente arranca ahí lo pisa (en el celular, además, el
+     * micrófono se suelta mientras habla y lo que él dice se pierde).
+     */
+    function tocaHablar({ hayParaDecir, usuarioHabla, msDesdeQueHablo, ocupado, pausaMs = 1800 }) {
         return hayParaDecir && !usuarioHabla && !ocupado && msDesdeQueHablo >= pausaMs;
     }
 
@@ -145,7 +150,7 @@ const Conversacion = (typeof window === 'undefined') ? null : (() => {
     // pasa, así que ahí sigue escuchando siempre y se lo puede cortar hablando.
     const ALTAVOZ = window.matchMedia('(pointer: coarse)').matches;
     let reabriendoMic = false;
-    const CIERRE_TURNO_MS = 2000;   // sin hablar este rato, lo que quedó partido se manda igual
+    const CIERRE_TURNO_MS = 2500;   // sin hablar este rato, lo que quedó partido se manda igual
     const ACUSE_MS = 1300;          // si pensar tarda más que esto, contesta algo corto
     const MAX_HISTORIAL = 12;
 
