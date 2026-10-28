@@ -27,7 +27,19 @@ Lo dictado llega partido donde hubo una pausa, no donde termina la idea. *"Agreg
 - Las respuestas cortas que se repiten ("sí", "no", "deshacé", "terminamos") se resuelven con una **regex, sin modelo**: no vale la pena una vuelta de red por un "dale".
 - El resto lo separa un modelo rápido de Groq (~100–250 ms).
 - Una **regla fija** corrige al modelo: si un pedido termina en una palabra que pide continuación ("a", "de", "con", "el precio es"), vuelve a quedar esperando. El modelo daba por completo "…18 metros cuadrados a" y el precio llegaba como otro item.
-- Si pasan 2 segundos sin hablar, lo que quedó esperando se manda igual.
+- Otra regla fija: si el último pedido nombra un trabajo pero **todavía no trae ningún número** ("limpieza periódica y final"), espera. Leyendo una planilla, el nombre llega antes que "global, uno, 650 mil"; mandado solo, el item quedaba en $0 y los datos llegaban sueltos en el pedido siguiente, donde un precio terminó en otro item (los cordones). No esperan las preguntas ni los "sacá…".
+- Si pasan 2,5 segundos sin hablar, lo que quedó esperando se manda igual.
+
+## De qué item habla
+
+Con los datos sueltos es fácil que el que piensa los ponga en el item equivocado, y por voz él no se entera: dicta mirando el papel. Hay dos capas:
+
+- **El prompt** le explica de quién son los datos sueltos (del trabajo que se nombró justo antes) y cuándo preguntar antes de hacer: datos que no sabe a qué item van, una frase cortada, dos lecturas que cambian la plata ("¿650 o 650 mil?").
+- **El servidor** (`server/lib/referencias.js`) no deja cambiar ni borrar un item existente si nada lo ata a lo que dijo: su nombre (o una palabra del nombre), su número, "el último" o "todos". Lo último que se habló cuenta solo si el turno no trae items nuevos: "ponele 650 mil" justo después de cargar la limpieza va a la limpieza. Si se frena algo, no se aplica y en vez de lo que el modelo iba a decir pregunta: *"No me quedó claro a qué item iba eso: no toqué «Cordones». ¿A cuál se lo pongo?"*.
+
+## Abreviaturas
+
+Dictado, todo llega con las palabras enteras. En el título y la dirección se escriben como en un presupuesto: Av., Bv., B°, Pje., N°, Dpto., Mza., Gral., Dr., Ing., Arq. Lo pide el prompt y lo asegura `server/lib/abreviaturas.js`. Si él pide la palabra completa, se respeta.
 
 ## El pensador
 
@@ -49,7 +61,7 @@ Reglas que se le dan y que salieron de usarlo:
 
 ## Cuándo habla
 
-- **No habla encima.** Mientras él sigue dictando, las respuestas se acumulan y cada cambio aplicado suena con un "tic". Cuando hace una pausa de ~1,2 s dice **un solo resumen**: *"Cargué 5 items. Dos quedaron sin precio. ¿Seguimos?"*. Es lo que permite leerle una planilla entera.
+- **No habla encima.** Mientras él sigue dictando, las respuestas se acumulan y cada cambio aplicado suena con un "tic". Cuando hace una pausa de ~1,8 s (antes 1,2: arrancaba a hablar mientras él respiraba entre fila y fila) dice **un solo resumen**: *"Cargué 5 items. Dos quedaron sin precio. ¿Seguimos?"*. Es lo que permite leerle una planilla entera.
 - **Acuse rápido.** Si pensar tarda más de 1,3 s y él ya se calló, contesta algo corto mientras tanto.
 - **Eco.** Si lo que escuchó coincide con lo que el asistente acaba de decir, se descarta. Se comparan pares de palabras seguidas y no palabras sueltas, porque un pedido nuevo comparte palabras con la respuesta anterior ("el contrapiso quedó a 18 mil" → "ahora el contrapiso a 21 mil") y con palabras sueltas se descartaba.
 
